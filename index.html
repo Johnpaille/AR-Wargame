@@ -13,10 +13,11 @@
   #ui { position: fixed; inset: 0; pointer-events: none; display: flex; flex-direction: column; justify-content: space-between; }
   #ui[hidden] { display: none; }
   #status { pointer-events: auto; margin: 12px; padding: 8px 12px; background: var(--btn); border-radius: 8px; text-align: center; }
-  #panel { pointer-events: auto; padding: 8px; display: grid; gap: 6px; }
-  .row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; justify-content: center; }
-  button, select, input { font: inherit; color: var(--fg); background: var(--btn); border: 1px solid #555; border-radius: 8px; padding: 8px 10px; }
-  input { width: 3.2em; }
+  #panel { pointer-events: auto; padding: 6px; display: grid; gap: 4px; font-size: 14px; }
+  .row { display: flex; gap: 4px; flex-wrap: wrap; align-items: center; justify-content: center; }
+  button, select, input { font: inherit; color: var(--fg); background: var(--btn); border: 1px solid #555; border-radius: 8px; padding: 6px 8px; }
+  input { width: 2.6em; padding: 4px; }
+  input[type=checkbox] { width: auto; }
   button.on { background: var(--on); border-color: var(--on); color: #000; }
   label { background: var(--btn); padding: 2px 6px; border-radius: 8px; }
   #unitName { background: var(--btn); padding: 8px 10px; border-radius: 8px; font-weight: bold; }
@@ -33,6 +34,7 @@
   <div id="status">Vise la table.</div>
   <div id="panel">
     <div class="row">
+      <select id="side" aria-label="Camp"><option value="1">J1</option><option value="2">J2</option></select>
       <button id="newUnit">+ Unité</button>
       <span id="unitName">–</span>
       <label>M <input id="move" type="number" value="6" min="0" step="1">"</label>
@@ -41,6 +43,12 @@
     <div class="row">
       <label>Socle <select id="base"></select></label>
       <label id="calibLabel" hidden>Règle <input id="calibLen" type="number" value="6" min="1">"</label>
+      <span id="terrainOpts" hidden>
+        <label><input id="blocks" type="checkbox" checked> Bloque la vue</label>
+        <label>H <input id="tH" type="number" value="5" min="0">"</label>
+      </span>
+      <button id="advance">Avance D6</button>
+      <button id="charge">Charge 2D6</button>
       <button id="undo">Retirer fig.</button>
       <button id="clear">Effacer traits</button>
     </div>
@@ -49,6 +57,7 @@
       <button data-mode="measure">Mesurer</button>
       <button data-mode="move">Déplacer</button>
       <button data-mode="shoot">Tirer</button>
+      <button data-mode="terrain">Décor</button>
       <button data-mode="calib">Calibrer</button>
     </div>
   </div>

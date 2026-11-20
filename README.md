@@ -18,10 +18,15 @@ WebXR app (Chrome Android + ARCore) that overlays measurements on a real tableto
 - Selected unit shows its move aura (green) and weapon-range aura (unit colour). Enemy models in range get a white halo. Out-of-coherency models turn red (2", 2 neighbours at 7+ models).
 - **Mesurer**: 2 taps, base-to-base distance.
 - **Déplacer**: tap the model, then its new spot. Red if over M.
-- **Tirer**: shooter, then target. Tracer if in range.
+- **Tirer**: shooter, then target. Checks range and line of sight, tells if the target has cover. Tracer if the shot is legal.
+- **Décor**: aim at 2 corners of one side of a ruin, then the opposite side. "Bloque la vue" on = obscuring (can see into, not through), off = cover only. **Retirer décor** removes the last one.
+- **J1 / J2**: side of the selected or next unit. Halos only show enemy models.
+- **Avance D6**: move aura becomes M + D6. **Charge 2D6**: move aura becomes the roll, and enemies reachable within roll + 1" get a halo. The roll is cleared when you select another unit.
 
 Rule maths are in `rules.js`, checked by `node rules.test.mjs`.
 
+Line of sight is 2D: footprints only, heights ignored. It tests 5 points per base (centre + rim), so it is close to "any part of the model" but not exact.
+
 ## Not done yet
 
-Line of sight / terrain volumes, depth occlusion, multi-player sharing, saving a game, ArUco base tracking.
+Depth occlusion, multi-player sharing, saving a game, ArUco base tracking, model/terrain heights for LoS.

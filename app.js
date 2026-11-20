@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { INCH, BASES_MM, edgeDist, incoherent, inRange, newScale, toIn } from './rules.js';
+import { INCH, BASES_MM, edgeDist, incoherent, inRange, newScale, toIn, rectFromTaps, lineOfSight, hasCover, d6 } from './rules.js';
 
 const $ = (id) => document.getElementById(id);
 const COLORS = [0x3fa9f5, 0xf5a623, 0xbd10e0, 0x50e3c2, 0xf8e71c, 0xff6f91, 0x9b9b9b, 0x7ed321];
@@ -56,9 +56,30 @@ const boltMat = new THREE.MeshBasicMaterial({ color: YELLOW });
 const units = [];
 let sel = null, mode = 'place', pending = null;
 const fx = [];
+const terrains = []; // { poly, blocks, mesh }
+const terrainMat = (color, opacity) => new THREE.MeshBasicMaterial({ color, transparent: true, opacity, depthWrite: false });
+const blockMat = terrainMat(0x8b5a2b, 0.35), coverMat = terrainMat(0x9b9b9b, 0.2);
+const edgeMat = new THREE.LineBasicMaterial({ color: WHITE });
+
+// Move allowance after an Advance (M + D6) or a Charge (2D6) roll.
+const allowedMove = (u) => (u.roll?.kind === 'advance' ? u.move + u.roll.n : u.roll?.kind === 'charge' ? u.roll.n : u.move);
+const uname = (u) => `J${u.side} ${u.name}`;
+
+function addTerrain(poly, y, blocks, hIn) {
+  const [a, b, , d] = poly;
+  const h = Math.max(hIn, 0.5) * INCH;
+  const geo = new THREE.BoxGeometry(Math.hypot(b.x - a.x, b.z - a.z), h, Math.hypot(d.x - a.x, d.z - a.z));
+  const mesh = new THREE.Mesh(geo, blocks ? blockMat : coverMat);
+  mesh.add(new THREE.LineSegments(new THREE.EdgesGeometry(geo), edgeMat));
+  mesh.position.set(poly.reduce((s, c) => s + c.x, 0) / 4, y + h / 2, poly.reduce((s, c) => s + c.z, 0) / 4);
+  mesh.rotation.y = -Math.atan2(b.z - a.z, b.x - a.x);
+  mesh.renderOrder = 3;
+  root.add(mesh);
+  terrains.push({ poly, blocks, mesh });
+}
 
 function newUnit() {
-  const u = { name: `Unité ${units.length + 1}`, color: COLORS[units.length % COLORS.length], models: [], move: 6, range: 24, group: new THREE.Group(), aura: new THREE.Group() };
+  const u = { name: `Unité ${units.length + 1}`, side: Number($('side').value), roll: null, color: COLORS[units.length % COLORS.length], models: [], move: 6, range: 24, group: new THREE.Group(), aura: new THREE.Group() };
   u.group.add(u.aura);
   root.add(u.group);
   units.push(u);
@@ -67,7 +88,9 @@ function newUnit() {
 }
 
 function selectUnit(u) {
+  if (sel && sel !== u) sel.roll = null; // a roll lasts while you work on that unit
   sel = u;
+  $('side').value = u.side;
   $('move').value = u.move;
   $('range').value = u.range;
   refresh();
@@ -94,15 +117,20 @@ function refresh() {
     const bad = new Set(incoherent(u.models));
     for (const m of u.models) {
       m.mesh.material.color.setHex(bad.has(m) ? RED : u.color);
-      // Rightful-Ruler style: highlight enemy models within the selected unit's weapon range
-      m.halo.visible = !!sel && u !== sel && inRange(sel.models, m, sel.range);
+      // Rightful-Ruler style halo on enemy models: shootable (range + LoS), or reachable after a charge roll (within roll + 1" engagement).
+      // shortcut: charge reach ignores pathing around terrain.
+      const enemy = !!sel && u.side !== sel.side;
+      m.halo.visible = enemy && (sel.roll?.kind === 'charge'
+        ? sel.models.some((s) => edgeDist(s, m) <= (sel.roll.n + 1) * INCH + 1e-6)
+        : inRange(sel.models, m, sel.range, terrains));
     }
     disposeTree(u.aura);
   }
   if (sel) {
     rangeMat.color.setHex(sel.color);
+    const mv = allowedMove(sel);
     for (const m of sel.models) {
-      for (const [R, mat, order] of [[m.r + sel.move * INCH, moveMat, 1], [m.r + sel.range * INCH, rangeMat, 2]]) {
+      for (const [R, mat, order] of [[m.r + mv * INCH, moveMat, 1], [m.r + sel.range * INCH, rangeMat, 2]]) {
         const d = new THREE.Mesh(new THREE.CircleGeometry(R, 64).rotateX(-Math.PI / 2), mat);
         d.position.set(m.x, m.y + 0.0005, m.z);
         d.renderOrder = order;
@@ -110,7 +138,8 @@ function refresh() {
       }
     }
     const nBad = incoherent(sel.models).length;
-    $('unitName').textContent = `${sel.name} (${sel.models.length})${nBad ? ' – cohésion !' : ''}`;
+    const roll = sel.roll ? ` – ${sel.roll.kind === 'advance' ? 'avance' : 'charge'} ${allowedMove(sel)}"` : '';
+    $('unitName').textContent = `${uname(sel)} (${sel.models.length})${roll}${nBad ? ' – cohésion !' : ''}`;
   } else $('unitName').textContent = '–';
 }
 
@@ -181,10 +210,10 @@ function animate() {
 const handlers = {
   place(p) {
     const m = pick(p);
-    if (m) return selectUnit(m.u), status(`${m.u.name} sélectionnée`);
+    if (m) return selectUnit(m.u), status(`${uname(m.u)} sélectionnée`);
     addModel(sel ?? newUnit(), p);
     refresh();
-    status(`${sel.name} : ${sel.models.length} figurine(s)`);
+    status(`${uname(sel)} : ${sel.models.length} figurine(s)`);
   },
   measure(p) {
     const pt = target(p);
@@ -200,17 +229,17 @@ const handlers = {
       if (!m) return status('Vise une figurine à déplacer');
       pending = m;
       selectUnit(m.u);
-      return status(`Vise la nouvelle position (M ${m.u.move}")`);
+      return status(`Vise la nouvelle position (max ${allowedMove(m.u)}")`);
     }
-    const m = pending;
+    const m = pending, max = allowedMove(m.u);
     pending = null;
     disposeTree(notes);
-    const d = Math.hypot(p.x - m.x, p.z - m.z), over = toIn(d) > m.u.move + 1e-6;
+    const d = Math.hypot(p.x - m.x, p.z - m.z), over = toIn(d) > max + 1e-6;
     line({ ...m, r: 0 }, { ...p, r: 0 }, over ? RED : GREEN, fmt(d));
     Object.assign(m, { x: p.x, y: p.y, z: p.z });
     m.mesh.position.set(p.x, p.y + 0.001, p.z);
     refresh();
-    status(over ? `TROP LOIN : ${fmt(d)} > M ${m.u.move}"` : `Déplacé de ${fmt(d)}`);
+    status(over ? `TROP LOIN : ${fmt(d)} > ${max}"` : `Déplacé de ${fmt(d)}`);
   },
   shoot(p) {
     if (!pending) {
@@ -220,12 +249,29 @@ const handlers = {
       selectUnit(m.u);
       return status(`Vise la cible (portée ${m.u.range}")`);
     }
-    const a = pending, b = target(p), d = edgeDist(a, b), ok = toIn(d) <= a.u.range + 1e-6;
+    const a = pending, b = target(p), d = edgeDist(a, b);
+    const inR = toIn(d) <= a.u.range + 1e-6, vis = lineOfSight(a, b, terrains), cover = vis && hasCover(a, b, terrains);
     pending = null;
     disposeTree(notes);
-    line(a, b, ok ? YELLOW : RED, fmt(d));
-    if (ok) fire(a, b);
-    status(ok ? `Tir à ${fmt(d)}` : `Hors de portée : ${fmt(d)} > ${a.u.range}"`);
+    line(a, b, inR && vis ? YELLOW : RED, fmt(d) + (vis ? (cover ? ' couvert' : '') : ' pas de LdV'));
+    if (inR && vis) fire(a, b);
+    status(!vis ? `Pas de ligne de vue (${fmt(d)})`
+      : !inR ? `Hors de portée : ${fmt(d)} > ${a.u.range}"`
+      : `Tir à ${fmt(d)}${cover ? ' – cible à couvert' : ''}`);
+  },
+  terrain(p) {
+    if (!pending) disposeTree(notes);
+    pending = [...(pending ?? []), p];
+    dot(p);
+    if (pending.length === 1) return status('Décor : vise le 2e coin du même côté');
+    if (pending.length === 2) return status('Décor : vise le côté opposé (profondeur)');
+    const [a, b, c] = pending, poly = rectFromTaps(a, b, c);
+    pending = null;
+    disposeTree(notes);
+    if (!poly) return status('Décor trop petit, recommence');
+    addTerrain(poly, a.y, $('blocks').checked, Number($('tH').value) || 0);
+    refresh();
+    status(`Décor ${terrains.length} ajouté${$('blocks').checked ? ' (bloque la vue)' : ''}`);
   },
   calib(p) {
     if (!pending) return disposeTree(notes), dot(p), (pending = p), status('Calibration : vise l\'autre bout de la règle');
@@ -246,6 +292,7 @@ const HINTS = {
   move: 'Déplacer : vise la figurine, puis sa nouvelle position.',
   shoot: 'Tirer : vise le tireur, puis la cible.',
   calib: 'Calibrer : vise les 2 bouts d\'une règle de longueur connue.',
+  terrain: 'Décor : vise 2 coins d\'un côté, puis le côté opposé.',
 };
 
 function onSelect(e) {
@@ -265,7 +312,29 @@ for (const mm of BASES_MM) $('base').add(new Option(`${mm} mm`, mm, mm === 32, m
 $('newUnit').onclick = () => (newUnit(), status(`${sel.name} créée : pose ses figurines`));
 $('move').onchange = () => sel && ((sel.move = Number($('move').value) || 0), refresh());
 $('range').onchange = () => sel && ((sel.range = Number($('range').value) || 0), refresh());
+$('side').onchange = () => sel && ((sel.side = Number($('side').value)), refresh());
+$('advance').onclick = () => {
+  if (!sel) return status('Sélectionne une unité d\'abord');
+  const n = d6();
+  sel.roll = { kind: 'advance', n };
+  refresh();
+  status(`Avance : M ${sel.move}" + ${n} = ${sel.move + n}"`);
+};
+$('charge').onclick = () => {
+  if (!sel) return status('Sélectionne une unité d\'abord');
+  const [x, y] = [d6(), d6()];
+  sel.roll = { kind: 'charge', n: x + y };
+  refresh();
+  const reach = units.filter((u) => u.side !== sel.side).flatMap((u) => u.models).filter((m) => m.halo.visible).length;
+  status(`Charge : ${x} + ${y} = ${x + y}" – ${reach} figurine(s) ennemie(s) à portée`);
+};
+// "Retirer" removes the last decor in Décor mode, else the last model of the selected unit.
 $('undo').onclick = () => {
+  if (mode === 'terrain') {
+    const t = terrains.pop();
+    if (t) root.remove(t.mesh), t.mesh.traverse((c) => c.geometry?.dispose()), refresh();
+    return;
+  }
   const m = sel?.models.pop();
   if (m) sel.group.remove(m.mesh), disposeTree(m.mesh), refresh();
 };
@@ -276,6 +345,8 @@ for (const b of document.querySelectorAll('#modes button')) {
     pending = null;
     for (const o of document.querySelectorAll('#modes button')) o.classList.toggle('on', o === b);
     $('calibLabel').hidden = mode !== 'calib';
+    $('terrainOpts').hidden = mode !== 'terrain';
+    $('undo').textContent = mode === 'terrain' ? 'Retirer décor' : 'Retirer fig.';
     status(HINTS[mode]);
   };
 }
