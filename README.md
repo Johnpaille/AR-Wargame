@@ -9,7 +9,9 @@ WebXR app (Chrome Android + ARCore) that overlays measurements on a real tableto
 3. PC: `& "$env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe" reverse tcp:8000 tcp:8000`
 4. Phone Chrome: `http://localhost:8000` > Démarrer AR. Install "Google Play Services for AR" if asked.
 
-`localhost` through `adb reverse` counts as a secure origin, so WebXR works without HTTPS. Phone needs internet (three.js from CDN).
+`localhost` through `adb reverse` counts as a secure origin, so WebXR works without HTTPS.
+
+**Offline**: after one load over USB, a service worker (`sw.js`) keeps the app and three.js cached. Later, `http://localhost:8000` opens on the phone without the PC or cable (bookmark it or "Add to home screen"). App files are fetched network-first, so edits still arrive when the PC is connected. The shared game (`?room=`) still needs `serve.js`.
 
 ## Use
 

@@ -3,7 +3,7 @@
 // shortcut: no auth, anyone who can reach this port can read/post a room; LAN/dev use only.
 const http = require('http'), fs = require('fs'), path = require('path');
 const root = __dirname, port = Number(process.env.PORT || process.argv[2]) || 8000;
-const types = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.json': 'application/json' };
+const types = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.svg': 'image/svg+xml' };
 const MAX_BODY = 1 << 20; // 1 MB
 const rooms = new Map(); // room -> { clients: Set<res>, last: string | null }
 const roomOf = (url) => {

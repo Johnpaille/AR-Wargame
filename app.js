@@ -764,6 +764,9 @@ if (location.hash === '#debug') {
   };
 }
 
+// Offline cache (sw.js). Skipped in #debug so desktop tests always run the files on disk.
+if ('serviceWorker' in navigator && location.hash !== '#debug') navigator.serviceWorker.register('sw.js').catch(() => {});
+
 // ---------- session ----------
 let hitSource = null;
 (async () => {
