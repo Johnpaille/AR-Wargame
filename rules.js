@@ -1,30 +1,43 @@
-// Pure game-rule maths. All positions/radii in real metres on the table plane (x, z).
+// Pure game-rule maths, Warhammer 40,000 11th edition core rules.
+// All positions/radii in real metres on the table plane (x, z). Models: { x, z, r }.
+// shortcut: everything is 2D (horizontal); the 5" vertical limits and model/terrain heights are ignored.
 export const INCH = 0.0254;
 export const BASES_MM = [25, 28.5, 32, 40, 50, 60, 90];
+export const RULES = {
+  coherency: 2,     // 03.03 within 2" of at least one other model...
+  coherencyMax: 9,  // ...and within 9" of every other model
+  engagement: 2,    // 03.04 engagement range
+  chargeDeclare: 12, // 11.04 charge targets within 12"
+  objective: 3,     // 14.01.01 objective marker range
+  objectiveMm: 40,  // objective marker diameter
+};
 
 export const toIn = (m) => m / INCH;
+const EPS = 1e-6;
+const within = (d, inches) => d <= inches * INCH + EPS;
 
-// Base-to-base (edge-to-edge) horizontal distance, as 40k measures it.
+// Base-to-base (closest part to closest part) horizontal distance.
 export function edgeDist(a, b) {
   return Math.max(0, Math.hypot(a.x - b.x, a.z - b.z) - a.r - b.r);
 }
 
-// 40k 10th ed coherency: each model within 2" of 1 other model, or 2 others if the unit has 7+ models.
-// shortcut: ignores the 5" vertical limit (flat table assumed), check values if the edition changes.
-export function incoherent(models, rangeIn = 2, bigUnit = 7) {
+// Models breaking coherency (03.03).
+export function incoherent(models) {
   if (models.length < 2) return [];
-  const need = models.length >= bigUnit ? 2 : 1;
-  const max = rangeIn * INCH + 1e-6;
-  return models.filter((m) => models.filter((o) => o !== m && edgeDist(m, o) <= max).length < need);
+  return models.filter((m) => {
+    const others = models.filter((o) => o !== m);
+    return !others.some((o) => within(edgeDist(m, o), RULES.coherency)) || others.some((o) => !within(edgeDist(m, o), RULES.coherencyMax));
+  });
 }
 
-// Target can be shot by at least one model: in range and in line of sight.
-export const inRange = (shooters, target, rangeIn, terrains = []) =>
-  shooters.some((s) => edgeDist(s, target) <= rangeIn * INCH + 1e-6 && lineOfSight(s, target, terrains));
+export const engaged = (m, enemies) => enemies.some((e) => within(edgeDist(m, e), RULES.engagement));
 
-// ---------- terrain & line of sight (2D footprints on the table) ----------
+// ---------- terrain areas ----------
+// Terrain: { poly: [{x,z}x4], type: 'dense' | 'light' | 'exposed' }.
+// 13.10: areas containing light or dense features are obscuring.
+export const obscuring = (t) => t.type === 'dense' || t.type === 'light';
 
-// Oriented rectangle from 3 taps: a-b is one wall edge, c gives the depth. Returns 4 corners or null.
+// Oriented rectangle from 3 taps: a-b is one edge, c gives the depth. Returns 4 corners or null.
 export function rectFromTaps(a, b, c) {
   const L = Math.hypot(b.x - a.x, b.z - a.z);
   if (L < 0.01) return null;
@@ -47,31 +60,74 @@ export function inPoly(p, poly) {
   }
   return inside;
 }
+function segDist(p, a, b) {
+  const dx = b.x - a.x, dz = b.z - a.z, L2 = dx * dx + dz * dz;
+  const t = L2 ? Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.z - a.z) * dz) / L2)) : 0;
+  return Math.hypot(p.x - a.x - t * dx, p.z - a.z - t * dz);
+}
+// A model is within a terrain area if any part of its base is over the footprint.
+// shortcut: "any part of the base" reading of "within", check against the rulebook FAQ.
+export const inArea = (m, poly) => inPoly(m, poly) || poly.some((a, i) => segDist(m, a, poly[(i + 1) % poly.length]) < (m.r ?? 0));
+
 const crossesPoly = (p, q, poly) => poly.some((a, i) => segHit(p, q, a, poly[(i + 1) % poly.length])) || inPoly(p, poly) || inPoly(q, poly);
 
 // Sample points on a base: centre + 4 rim points. A point target (r=0) is just itself.
 const samples = (m) => (m.r ? [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1]] : [[0, 0]]).map(([i, j]) => ({ x: m.x + i * m.r * 0.95, z: m.z + j * m.r * 0.95 }));
 
-// 40k-ish visibility: visible if any rim-to-rim line misses every blocking footprint.
-// A blocking footprint does not block when the shooter or the target stands inside it (see into / out of ruins).
-// shortcut: 2D only, ignores model and terrain heights; upgrade with per-model heights + LiDAR/volumes.
+// 13.10 Obscuring: not visible if every line of sight crosses an obscuring area that neither model is within.
+// Lines are sampled between 5 points per base, an approximation of "any part of the model".
 export function lineOfSight(a, b, terrains) {
-  const walls = terrains.filter((t) => t.blocks && !inPoly(a, t.poly) && !inPoly(b, t.poly));
+  const walls = terrains.filter((t) => obscuring(t) && !inArea(a, t.poly) && !inArea(b, t.poly));
   if (!walls.length) return true;
   const sa = samples(a), sb = samples(b);
   return sa.some((p) => sb.some((q) => !walls.some((t) => crossesPoly(p, q, t.poly))));
 }
 
-// Benefit of cover: target inside a footprint, or some sight line crosses terrain.
-// shortcut: simplified vs the real rule (which depends on terrain type), good enough as a reminder.
-export function hasCover(a, b, terrains) {
+// 13.08 per model: (INFANTRY/BEASTS/SWARM within a terrain area) or not fully visible due to intervening terrain.
+// shortcut: target assumed INFANTRY; "not fully visible" = some sampled line crosses a terrain area the shooter is not in.
+export function modelCover(a, b, terrains) {
   const sa = samples(a), sb = samples(b);
-  return terrains.some((t) => inPoly(b, t.poly) || (!inPoly(a, t.poly) && sa.some((p) => sb.some((q) => crossesPoly(p, q, t.poly)))));
+  return terrains.some((t) => inArea(b, t.poly) || (!inArea(a, t.poly) && !inArea(b, t.poly) && sa.some((p) => sb.some((q) => crossesPoly(p, q, t.poly)))));
+}
+// The target unit has the benefit of cover only if every one of its models qualifies.
+export const unitCover = (shooter, targets, terrains) => targets.length > 0 && targets.every((m) => modelCover(shooter, m, terrains));
+
+// Target can be shot by at least one model: in range and visible.
+export const inRange = (shooters, target, rangeIn, terrains = []) =>
+  shooters.some((s) => within(edgeDist(s, target), rangeIn) && lineOfSight(s, target, terrains));
+
+// 11.04: a charge target must be within 12" and the unit must be able to end engaged (roll + 2").
+// shortcut: straight-line reach, ignores moving around terrain and other models.
+export const chargeReach = (chargers, target, roll) =>
+  chargers.some((s) => within(edgeDist(s, target), RULES.chargeDeclare) && within(edgeDist(s, target), roll + RULES.engagement));
+
+// ---------- objectives (14) ----------
+// obj: { x, z, r } marker or { poly } terrain objective. sides: [{ side, oc, models }].
+export const inObjRange = (m, obj) => (obj.poly ? inArea(m, obj.poly) : within(edgeDist(m, obj), RULES.objective));
+export function control(obj, units) {
+  const lvl = { 1: 0, 2: 0 };
+  for (const u of units) for (const m of u.models) if (inObjRange(m, obj)) lvl[u.side] += Math.max(0, u.oc);
+  return { ...lvl, owner: lvl[1] > lvl[2] ? 1 : lvl[2] > lvl[1] ? 2 : 0 };
 }
 
-// ---------- dice ----------
+// ---------- table frame (2 reference points) ----------
+// Coordinates relative to A, x-axis towards B. Survives a session restart or tracking drift.
+function axes(A, B) {
+  const L = Math.hypot(B.x - A.x, B.z - A.z);
+  return { ux: (B.x - A.x) / L, uz: (B.z - A.z) / L };
+}
+export function toFrame(p, A, B) {
+  const { ux, uz } = axes(A, B), dx = p.x - A.x, dz = p.z - A.z;
+  return { u: dx * ux + dz * uz, v: -dx * uz + dz * ux };
+}
+export function fromFrame(q, A, B) {
+  const { ux, uz } = axes(A, B);
+  return { x: A.x + q.u * ux - q.v * uz, z: A.z + q.u * uz + q.v * ux };
+}
+
+// ---------- dice / calibration ----------
 export const d6 = (rand = Math.random) => 1 + Math.floor(rand() * 6);
 
-// Calibration: a real `realIn` ruler measured as `measured` local metres under current scale k.
+// A real `realIn` ruler measured as `measured` local metres under current scale k.
 // Returns the new world-per-real scale so local units become real metres.
 export const newScale = (measured, k, realIn) => (measured * k) / (realIn * INCH);
