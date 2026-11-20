@@ -10,7 +10,10 @@ export const RULES = {
   chargeDeclare: 12, // 11.04 charge targets within 12"
   objective: 3,     // 14.01.01 objective marker range
   objectiveMm: 40,  // objective marker diameter
+  detection: 15,    // 13.09 hidden models: detection range
+  goneToGround: 3,  // 13.11.01 detection range reduction
 };
+export const PHASES = ['Commandement', 'Mouvement', 'Tir', 'Charge', 'Combat'];
 
 export const toIn = (m) => m / INCH;
 const EPS = 1e-6;
@@ -83,18 +86,41 @@ export function lineOfSight(a, b, terrains) {
   return sa.some((p) => sb.some((q) => !walls.some((t) => crossesPoly(p, q, t.poly))));
 }
 
+// Some sampled sight line from a to b crosses terrain t that the shooter is not in ("not fully visible due to intervening terrain").
+// shortcut: footprint stands in for the feature, so a model inside a ruin counts as partly hidden by its walls.
+const partlyBlocked = (a, b, t) => !inArea(a, t.poly) && samples(a).some((p) => samples(b).some((q) => crossesPoly(p, q, t.poly)));
+
 // 13.08 per model: (INFANTRY/BEASTS/SWARM within a terrain area) or not fully visible due to intervening terrain.
-// shortcut: target assumed INFANTRY; "not fully visible" = some sampled line crosses a terrain area the shooter is not in.
-export function modelCover(a, b, terrains) {
-  const sa = samples(a), sb = samples(b);
-  return terrains.some((t) => inArea(b, t.poly) || (!inArea(a, t.poly) && !inArea(b, t.poly) && sa.some((p) => sb.some((q) => crossesPoly(p, q, t.poly)))));
+export function modelCover(a, b, terrains, infantry = true) {
+  return terrains.some((t) => (infantry && inArea(b, t.poly)) || partlyBlocked(a, b, t));
 }
 // The target unit has the benefit of cover only if every one of its models qualifies.
-export const unitCover = (shooter, targets, terrains) => targets.length > 0 && targets.every((m) => modelCover(shooter, m, terrains));
+export const unitCover = (shooter, targets, terrains, infantry = true) =>
+  targets.length > 0 && targets.every((m) => modelCover(shooter, m, terrains, infantry));
+
+// 13.09 Hidden: INFANTRY/BEASTS/SWARM within a light/dense area, unit made no ranged attack this turn or the previous one.
+export const hidden = (m, terrains, infantry, shotRecently) =>
+  infantry && !shotRecently && terrains.some((t) => obscuring(t) && inArea(m, t.poly));
+
+// 13.11.01 Gone to ground: hidden and not fully visible due to intervening dense terrain -> detection range -3".
+export const goneToGround = (attacker, m, terrains) =>
+  terrains.some((t) => t.type === 'dense' && partlyBlocked(attacker, m, t));
+
+// Visibility of b to a: line of sight (13.10), and if b is hidden, a must be within b's detection range (13.09).
+export function canSee(a, b, terrains, bHidden = false) {
+  if (!lineOfSight(a, b, terrains)) return false;
+  if (!bHidden) return true;
+  const det = RULES.detection - (goneToGround(a, b, terrains) ? RULES.goneToGround : 0);
+  return within(edgeDist(a, b), det);
+}
 
 // Target can be shot by at least one model: in range and visible.
-export const inRange = (shooters, target, rangeIn, terrains = []) =>
-  shooters.some((s) => within(edgeDist(s, target), rangeIn) && lineOfSight(s, target, terrains));
+export const inRange = (shooters, target, rangeIn, terrains = [], targetHidden = false) =>
+  shooters.some((s) => within(edgeDist(s, target), rangeIn) && canSee(s, target, terrains, targetHidden));
+
+// ---------- morale (01.06, 01.07, 08.03) ----------
+export const halfStrength = (start, now) => start > 1 && now * 2 <= start;
+export const leadershipPass = (roll2d6, ld) => roll2d6 >= ld;
 
 // 11.04: a charge target must be within 12" and the unit must be able to end engaged (roll + 2").
 // shortcut: straight-line reach, ignores moving around terrain and other models.
@@ -104,10 +130,19 @@ export const chargeReach = (chargers, target, roll) =>
 // ---------- objectives (14) ----------
 // obj: { x, z, r } marker or { poly } terrain objective. sides: [{ side, oc, models }].
 export const inObjRange = (m, obj) => (obj.poly ? inArea(m, obj.poly) : within(edgeDist(m, obj), RULES.objective));
+// Level of control (14.02). Battle-shocked units have OC '-' (01.07).
 export function control(obj, units) {
   const lvl = { 1: 0, 2: 0 };
-  for (const u of units) for (const m of u.models) if (inObjRange(m, obj)) lvl[u.side] += Math.max(0, u.oc);
+  for (const u of units) for (const m of u.models) if (!u.shocked && inObjRange(m, obj)) lvl[u.side] += Math.max(0, u.oc);
   return { ...lvl, owner: lvl[1] > lvl[2] ? 1 : lvl[2] > lvl[1] ? 2 : 0 };
+}
+// Controller at the end of a phase/turn. A secured objective (14.03) stays with its owner until the opponent's level is greater.
+export function endPhaseOwner(prev, secured, lvl) {
+  if (secured && prev) {
+    const opp = prev === 1 ? 2 : 1;
+    if (!(lvl[opp] > lvl[prev])) return { owner: prev, secured: true };
+  }
+  return { owner: lvl.owner, secured: false };
 }
 
 // ---------- table frame (2 reference points) ----------

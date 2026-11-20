@@ -17,7 +17,11 @@ Recommended order: **Calibrer**, **Repères**, then place terrain, objectives an
 
 - **Calibrer**: aim at both ends of a ruler, enter its real length.
 - **Repères**: aim at 2 fixed points of the table (e.g. 2 corners). The game is then saved continuously, relative to those points. Do it again to fix tracking drift, or after restarting the app to resume the saved game. "Nouvelle partie" on the start screen forgets the save.
-- **Poser**: aim at a base and tap. Pick base size first (the reticle previews it). Tap an existing model to select its unit. **+ Unité** starts a new unit, **J1/J2** sets its side, **M / Portée / OC** its stats.
+- **Poser**: aim at a base and tap. Pick base size first (the reticle previews it). Tap an existing model to select its unit. **+ Unité** starts a new unit, **J1/J2** sets its side, **M / Portée / OC / Ld** its stats, and the type (Infanterie/Bête/Nuée or Véhicule/Monstre/autre) drives cover and Hidden.
+- **Phase button** (`T1 J1 · Commandement ›`): ends the current phase. Objective control is settled at each phase end; after Combat the next player's turn starts (J1 plays odd turns) and the app lists the units that must take a battle-shock test.
+- **Moral 2D6**: battle-shock roll for the selected unit (2D6 ≥ Ld). Battle-shocked units have OC '-'. The unit label shows `n/start`, `½` at half-strength, `ébranlée`, `cachée`.
+- **Retirer fig.**: before the first phase change it fixes the deployment (starting strength follows); afterwards it is a casualty.
+- Hidden models are drawn faded.
 - Selected unit shows its move aura (green) and weapon-range aura (unit colour). Enemy models it can shoot (range + visibility) get a white halo.
 - Model ring colours: red = out of coherency, orange = engaged (within 2" of an enemy).
 - **Mesurer**: 2 taps, base-to-base distance.
@@ -25,7 +29,7 @@ Recommended order: **Calibrer**, **Repères**, then place terrain, objectives an
 - **Tirer**: shooter, then target. Checks range and visibility; tells when the target unit has the benefit of cover (BS -1).
 - **Avance D6** (M + D6) / **Charge 2D6**: change the move aura. After a charge roll, the halo shows enemies within 12" that the roll can reach (roll + 2" engagement).
 - **Décor**: 2 corners of one side, then the opposite side. Type: dense / light (obscuring) or exposed. **Retirer décor** removes the last one.
-- **Objectif**: tap to place a 40mm marker (3" range), tap inside a terrain area to make it a terrain objective, tap a marker to remove it. Each objective shows the OC total per player and is coloured by the controlling player.
+- **Objectif**: tap to place a 40mm marker (3" range), tap inside a terrain area to make it a terrain objective, tap a marker to remove it. With **Sécuriser** selected, tap an objective to secure it for its controller. Each objective shows the live OC total per player (`[S]` = secured) and is coloured by the player controlling it since the last phase end.
 
 ## 11th edition rules used (`rules.js`, tested by `node rules.test.mjs`)
 
@@ -36,11 +40,15 @@ Recommended order: **Calibrer**, **Repères**, then place terrain, objectives an
 | Advance (09.06) | M + D6 |
 | Charge (11.04) | 2D6, targets within 12", must end engaged |
 | Obscuring (13.10) | light/dense areas block sight lines, except areas either model is within |
-| Benefit of cover (13.08) | every target model within a terrain area or not fully visible: BS -1 |
+| Benefit of cover (13.08) | every target model (INFANTRY/BEASTS/SWARM) within a terrain area, or not fully visible behind terrain: BS -1 |
+| Hidden (13.09) | INFANTRY/BEASTS/SWARM within a light/dense area, no ranged attack this turn or last: only visible within 15" |
+| Gone to ground (13.11.01) | hidden and partly behind dense terrain: detection 12" |
 | Objective marker (14.01.01) | 40mm, 3" range; terrain objective: within the area |
-| Level of control (14.02) | sum of OC in range, highest wins, tie = nobody |
+| Level of control (14.02) | sum of OC in range at each phase end, highest wins, tie = nobody |
+| Secured (14.03) | kept until the opponent's level is greater at a phase end |
+| Battle-shock (01.07, 08.03) | 2D6 ≥ Ld; tested if shocked or at/below half-strength; OC '-' |
 
-Simplifications: everything is 2D (heights and the 5" vertical limits ignored); sight lines are sampled between 5 points per base; target units are assumed INFANTRY for cover; Hidden (13.09), Solid gaps (13.11), secured objectives and battle-shock are not tracked; charge reach ignores pathing.
+Simplifications: everything is 2D (heights and the 5" vertical limits ignored); sight lines are sampled between 5 points per base; a terrain footprint stands in for its walls, so Solid (13.11, closed gaps under 3") is treated like Obscuring; a shot made in Tirer mode counts as the unit's ranged attack for Hidden; half-strength counts models, not wounds of single-model units; charge reach ignores pathing; which rules secure an objective is up to the players.
 
 ## Desktop testing
 

@@ -1,7 +1,8 @@
 import * as THREE from 'three';
 import {
   INCH, BASES_MM, RULES, edgeDist, incoherent, engaged, inRange, chargeReach, newScale, toIn, rectFromTaps,
-  inArea, lineOfSight, modelCover, unitCover, control, toFrame, fromFrame, d6,
+  inArea, modelCover, unitCover, control, toFrame, fromFrame, d6,
+  hidden, canSee, halfStrength, leadershipPass, endPhaseOwner, PHASES,
 } from './rules.js';
 
 const $ = (id) => document.getElementById(id);
@@ -74,12 +75,18 @@ const units = [];
 const terrains = []; // { poly, type, h, objective, mesh, tag }
 const objectives = []; // markers: { x, y, z, r, mesh, tag }
 let sel = null, mode = 'place', pending = null, refs = null;
+// Turn = player turn (J1 plays odd turns). `started` flips at the first phase change: before that, removing a model is a setup fix.
+let turn = 1, phase = 0, started = false;
 const fx = [];
 
 // Move allowance after an Advance (M + D6) or a Charge (2D6) roll.
 const allowedMove = (u) => (u.roll?.kind === 'advance' ? u.move + u.roll.n : u.roll?.kind === 'charge' ? u.roll.n : u.move);
 const uname = (u) => `J${u.side} ${u.name}`;
 const enemiesOf = (side) => units.filter((u) => u.side !== side).flatMap((u) => u.models);
+const activeSide = () => (turn % 2 ? 1 : 2);
+const infantry = (u) => u.type === 'inf'; // INFANTRY / BEASTS / SWARM
+const shotRecently = (u) => u.lastShot >= turn - 1; // ranged attacks this turn or the previous one
+const isHidden = (m) => hidden(m, terrains, infantry(m.u), shotRecently(m.u));
 
 function disposeTree(o) {
   o.traverse((c) => { c.geometry?.dispose(); if (c.material && !SHARED.has(c.material)) { c.material.map?.dispose(); c.material.dispose(); } });
@@ -110,14 +117,20 @@ function label(text, pos, color = '#fff') {
 
 // ---------- units ----------
 function makeUnit(props) {
-  const u = { roll: null, models: [], group: new THREE.Group(), aura: new THREE.Group(), ...props };
+  const u = {
+    oc: 2, ld: 7, type: 'inf', shocked: false, start: 0, lastShot: -9, // defaults also cover saves from older versions
+    ...props, roll: null, models: [], group: new THREE.Group(), aura: new THREE.Group(),
+  };
   u.group.add(u.aura);
   root.add(u.group);
   units.push(u);
   return u;
 }
 function newUnit() {
-  const u = makeUnit({ name: `Unité ${units.length + 1}`, side: Number($('side').value), color: COLORS[units.length % COLORS.length], move: 6, range: 24, oc: 2 });
+  const u = makeUnit({
+    name: `Unité ${units.length + 1}`, side: Number($('side').value), color: COLORS[units.length % COLORS.length],
+    move: 6, range: 24, oc: 2, ld: 7, type: $('uType').value, shocked: false, start: 0, lastShot: -9,
+  });
   selectUnit(u);
   return u;
 }
@@ -128,6 +141,8 @@ function selectUnit(u) {
   $('move').value = u.move;
   $('range').value = u.range;
   $('oc').value = u.oc;
+  $('ld').value = u.ld;
+  $('uType').value = u.type;
   refresh();
 }
 function addModel(u, p, r = Number($('base').value) / 2000) {
@@ -138,10 +153,11 @@ function addModel(u, p, r = Number($('base').value) / 2000) {
   mesh.position.set(p.x, p.y + 0.001, p.z);
   u.group.add(mesh);
   u.models.push({ x: p.x, y: p.y, z: p.z, r, mesh, halo, u });
+  u.start = Math.max(u.start, u.models.length); // starting strength
 }
 
 // ---------- terrain & objectives ----------
-function addTerrain(poly, y, type, hIn, objective = false) {
+function addTerrain(poly, y, type, hIn, objective = false, owner = 0, secured = false) {
   const [a, b, , d] = poly;
   const h = Math.max(hIn, 0.5) * INCH;
   const geo = new THREE.BoxGeometry(Math.hypot(b.x - a.x, b.z - a.z), h, Math.hypot(d.x - a.x, d.z - a.z));
@@ -152,28 +168,28 @@ function addTerrain(poly, y, type, hIn, objective = false) {
   mesh.rotation.y = -Math.atan2(b.z - a.z, b.x - a.x);
   mesh.renderOrder = 3;
   root.add(mesh);
-  terrains.push({ poly: poly.map(({ x, z }) => ({ x, z })), y, type, h: hIn, objective, mesh, tag: null, top: new THREE.Vector3(cx, y + h + 0.03, cz) });
+  terrains.push({ poly: poly.map(({ x, z }) => ({ x, z })), y, type, h: hIn, objective, owner, secured, mesh, tag: null, top: new THREE.Vector3(cx, y + h + 0.03, cz) });
 }
 function setTerrainObjective(t, on) {
   t.objective = on;
   t.mesh.children[0].material = on ? objEdgeMat : edgeMat;
 }
-function addObjective(p) {
+function addObjective(p, owner = 0, secured = false) {
   const r = RULES.objectiveMm / 2000;
   const mesh = new THREE.Mesh(new THREE.CircleGeometry(r, 32).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ color: GOLD }));
   mesh.add(new THREE.Mesh(ringGeo(r + RULES.objective * INCH - 0.002, r + RULES.objective * INCH), new THREE.MeshBasicMaterial({ color: GOLD })));
   mesh.position.set(p.x, p.y + 0.001, p.z);
   root.add(mesh);
-  objectives.push({ x: p.x, y: p.y, z: p.z, r, mesh, tag: null, top: new THREE.Vector3(p.x, p.y + 0.04, p.z) });
+  objectives.push({ x: p.x, y: p.y, z: p.z, r, owner, secured, mesh, tag: null, top: new THREE.Vector3(p.x, p.y + 0.04, p.z) });
 }
-// Control label above each objective (14.02), rebuilt only when the text changes.
+// Label above each objective: live levels of control, coloured by the controller decided at the last phase end (14.02).
 function updateObjectiveTag(o) {
   const c = control(o, units);
-  const text = c[1] + c[2] === 0 ? 'Objectif' : `J1 ${c[1]} – J2 ${c[2]}`;
-  const key = text + c.owner;
+  const text = `J1 ${c[1]} – J2 ${c[2]}${o.secured ? ' [S]' : ''}`;
+  const key = text + o.owner;
   if (o.tagKey === key) return;
   if (o.tag) removeObj(o.tag);
-  o.tag = label(text, o.top, SIDE_CSS[c.owner]);
+  o.tag = label(text, o.top, SIDE_CSS[o.owner]);
   o.tagKey = key;
   root.add(o.tag);
 }
@@ -184,9 +200,13 @@ function refresh() {
     const bad = new Set(incoherent(u.models)), foes = enemiesOf(u.side);
     for (const m of u.models) {
       m.mesh.material.color.setHex(bad.has(m) ? RED : engaged(m, foes) ? ORANGE : u.color);
+      // hidden models (13.09) are drawn faded
+      const hid = isHidden(m);
+      m.mesh.material.transparent = hid;
+      m.mesh.material.opacity = hid ? 0.4 : 1;
       // Rightful-Ruler style halo on enemy models: shootable (range + visible), or reachable by the charge roll.
       const enemy = !!sel && u.side !== sel.side;
-      m.halo.visible = enemy && (sel.roll?.kind === 'charge' ? chargeReach(sel.models, m, sel.roll.n) : inRange(sel.models, m, sel.range, terrains));
+      m.halo.visible = enemy && (sel.roll?.kind === 'charge' ? chargeReach(sel.models, m, sel.roll.n) : inRange(sel.models, m, sel.range, terrains, hid));
     }
     disposeTree(u.aura);
   }
@@ -203,8 +223,16 @@ function refresh() {
     }
     const nBad = incoherent(sel.models).length;
     const roll = sel.roll ? ` – ${sel.roll.kind === 'advance' ? 'avance' : 'charge'} ${allowedMove(sel)}"` : '';
-    $('unitName').textContent = `${uname(sel)} (${sel.models.length})${roll}${nBad ? ' – cohésion !' : ''}`;
+    const flags = [
+      roll,
+      nBad ? ' – cohésion !' : '',
+      halfStrength(sel.start, sel.models.length) ? ' – ½' : '',
+      sel.shocked ? ' – ébranlée' : '',
+      sel.models.length && sel.models.every(isHidden) ? ' – cachée' : '',
+    ].join('');
+    $('unitName').textContent = `${uname(sel)} (${sel.models.length}/${sel.start})${flags}`;
   } else $('unitName').textContent = '–';
+  $('phase').textContent = `T${turn} J${activeSide()} · ${PHASES[phase]} ›`;
   for (const o of [...objectives, ...terrains.filter((t) => t.objective)]) updateObjectiveTag(o);
   autosave();
 }
@@ -257,9 +285,11 @@ function snapshot() {
   const f = (p) => toFrame(p, refs.A, refs.B);
   return {
     d: Math.hypot(refs.B.x - refs.A.x, refs.B.z - refs.A.z),
-    units: units.map((u) => ({ name: u.name, side: u.side, color: u.color, move: u.move, range: u.range, oc: u.oc, models: u.models.map((m) => ({ ...f(m), r: m.r })) })),
-    terrains: terrains.map((t) => ({ poly: t.poly.map(f), type: t.type, h: t.h, objective: t.objective })),
-    objectives: objectives.map(f),
+    turn, phase, started,
+    units: units.map(({ name, side, color, move, range, oc, ld, type, shocked, start, lastShot, models }) =>
+      ({ name, side, color, move, range, oc, ld, type, shocked, start, lastShot, models: models.map((m) => ({ ...f(m), r: m.r })) })),
+    terrains: terrains.map((t) => ({ poly: t.poly.map(f), type: t.type, h: t.h, objective: t.objective, owner: t.owner, secured: t.secured })),
+    objectives: objectives.map((o) => ({ ...f(o), owner: o.owner, secured: o.secured })),
   };
 }
 function clearAll() {
@@ -267,6 +297,7 @@ function clearAll() {
   for (const t of terrains) { if (t.tag) removeObj(t.tag); removeObj(t.mesh); }
   for (const o of objectives) { if (o.tag) removeObj(o.tag); removeObj(o.mesh); }
   units.length = terrains.length = objectives.length = 0;
+  turn = 1; phase = 0; started = false;
   sel = null;
   pending = null;
   disposeTree(notes);
@@ -274,13 +305,14 @@ function clearAll() {
 function restore(s) {
   clearAll();
   const g = (q) => ({ ...fromFrame(q, refs.A, refs.B), y: refs.A.y });
+  ({ turn = 1, phase = 0, started = false } = s);
   for (const su of s.units) {
     const { models, ...props } = su;
     const u = makeUnit(props);
     for (const m of models) addModel(u, g(m), m.r);
   }
-  for (const t of s.terrains) addTerrain(t.poly.map(g), refs.A.y, t.type, t.h, t.objective);
-  for (const o of s.objectives) addObjective(g(o));
+  for (const t of s.terrains) addTerrain(t.poly.map(g), refs.A.y, t.type, t.h, t.objective, t.owner, t.secured);
+  for (const o of s.objectives) addObjective(g(o), o.owner, o.secured);
   refresh();
 }
 function autosave() {
@@ -341,13 +373,20 @@ const handlers = {
       return status(`Vise la cible (portée ${m.u.range}")`);
     }
     const a = pending, b = target(p), d = edgeDist(a, b);
-    const inR = toIn(d) <= a.u.range + 1e-6, vis = lineOfSight(a, b, terrains);
-    const cover = vis && (b.u ? unitCover(a, b.u.models, terrains) : modelCover(a, b, terrains));
+    const hid = !!b.u && isHidden(b);
+    const los = canSee(a, b, terrains), vis = canSee(a, b, terrains, hid);
+    const inR = toIn(d) <= a.u.range + 1e-6;
+    const cover = vis && (b.u ? unitCover(a, b.u.models, terrains, infantry(b.u)) : modelCover(a, b, terrains));
     pending = null;
     disposeTree(notes);
-    line(a, b, inR && vis ? YELLOW : RED, fmt(d) + (vis ? (cover ? ' couvert' : '') : ' pas de LdV'));
-    if (inR && vis) fire(a, b);
-    status(!vis ? `Pas de ligne de vue (${fmt(d)})`
+    line(a, b, inR && vis ? YELLOW : RED, fmt(d) + (!los ? ' pas de LdV' : !vis ? ' cachée' : cover ? ' couvert' : ''));
+    if (inR && vis) {
+      fire(a, b);
+      a.u.lastShot = turn; // the shooting unit can no longer be hidden this turn and next
+      refresh();
+    }
+    status(!los ? `Pas de ligne de vue (${fmt(d)})`
+      : !vis ? `Cible cachée : hors de sa portée de détection (${fmt(d)})`
       : !inR ? `Hors de portée : ${fmt(d)} > ${a.u.range}"`
       : `Tir à ${fmt(d)}${cover ? ' – unité à couvert : CT -1' : ''}`);
   },
@@ -365,9 +404,19 @@ const handlers = {
     refresh();
     status(`Décor ${terrains.length} (${TERRAIN[type].label}) ajouté`);
   },
-  // Tap inside a terrain area: toggle it as a terrain objective (14.01). Tap an objective marker: remove it. Else: place a marker.
+  // Poser: tap inside a terrain area toggles it as a terrain objective (14.01), tap a marker removes it, else places one.
+  // Sécuriser: tap an objective to toggle "secured" for its current controller (14.03).
   objective(p) {
     const o = objectives.find((q) => Math.hypot(q.x - p.x, q.z - p.z) < q.r + 0.005);
+    const t = !o && terrains.find((q) => inArea({ ...p, r: 0 }, q.poly));
+    if ($('objAct').value === 'secure') {
+      const target = o ?? (t?.objective ? t : null);
+      if (!target) return status('Vise un objectif');
+      if (!target.owner) return status('Objectif contrôlé par personne : rien à sécuriser');
+      target.secured = !target.secured;
+      refresh();
+      return status(target.secured ? `Objectif sécurisé par J${target.owner}` : 'Objectif plus sécurisé');
+    }
     if (o) {
       objectives.splice(objectives.indexOf(o), 1);
       if (o.tag) removeObj(o.tag);
@@ -375,7 +424,6 @@ const handlers = {
       refresh();
       return status('Objectif retiré');
     }
-    const t = terrains.find((q) => inArea({ ...p, r: 0 }, q.poly));
     if (t) {
       setTerrainObjective(t, !t.objective);
       if (!t.objective && t.tag) removeObj(t.tag), (t.tag = null), (t.tagKey = null);
@@ -421,7 +469,7 @@ const HINTS = {
   move: 'Déplacer : vise la figurine, puis sa nouvelle position.',
   shoot: 'Tirer : vise le tireur, puis la cible.',
   terrain: 'Décor : vise 2 coins d\'un côté, puis le côté opposé.',
-  objective: 'Objectif : tape pour poser un pion, dans un décor pour en faire un objectif, sur un pion pour le retirer.',
+  objective: 'Objectif : tape pour poser un pion, dans un décor pour en faire un objectif, sur un pion pour le retirer. Choix "Sécuriser" pour verrouiller un objectif.',
   refs: 'Repères : vise 2 points fixes de la table (ex. 2 coins). Refais-le pour recaler ou reprendre une partie.',
   calib: 'Calibrer : vise les 2 bouts d\'une règle de longueur connue.',
 };
@@ -446,6 +494,32 @@ unitInput('side', 'side');
 unitInput('move', 'move');
 unitInput('range', 'range');
 unitInput('oc', 'oc');
+unitInput('ld', 'ld');
+$('uType').onchange = () => sel && ((sel.type = $('uType').value), refresh());
+
+// End of phase: settle objective control (14.02, 14.03), then move on. After the Fight phase, the next player's turn starts.
+$('phase').onclick = () => {
+  for (const o of [...objectives, ...terrains.filter((t) => t.objective)]) Object.assign(o, endPhaseOwner(o.owner, o.secured, control(o, units)));
+  started = true;
+  phase = (phase + 1) % PHASES.length;
+  if (phase === 0) {
+    turn++;
+    for (const u of units) u.roll = null;
+  }
+  refresh();
+  if (phase !== 0) return status(`${PHASES[phase]} (J${activeSide()}) – contrôle des objectifs mis à jour`);
+  // 08.03 battle-shock step: the active player tests units that are battle-shocked or at/below half-strength
+  const due = units.filter((u) => u.side === activeSide() && (u.shocked || halfStrength(u.start, u.models.length)));
+  status(`Tour ${turn}, J${activeSide()} – ` + (due.length ? `tests de moral : ${due.map((u) => u.name).join(', ')}` : 'aucun test de moral'));
+};
+// Battle-shock roll (01.07): 2D6 >= Ld, else battle-shocked (OC '-').
+$('morale').onclick = () => {
+  if (!sel) return status('Sélectionne une unité d\'abord');
+  const [x, y] = [d6(), d6()], ok = leadershipPass(x + y, sel.ld);
+  sel.shocked = !ok;
+  refresh();
+  status(`Moral ${uname(sel)} : ${x} + ${y} = ${x + y} vs Ld ${sel.ld}+ → ${ok ? 'réussi' : 'ÉBRANLÉE (OC -)'}`);
+};
 $('advance').onclick = () => {
   if (!sel) return status('Sélectionne une unité d\'abord');
   const n = d6();
@@ -468,8 +542,16 @@ $('undo').onclick = () => {
     if (t) { if (t.tag) removeObj(t.tag); removeObj(t.mesh); refresh(); }
     return;
   }
+  if (mode === 'objective') {
+    const o = objectives.pop();
+    if (o) { if (o.tag) removeObj(o.tag); removeObj(o.mesh); refresh(); }
+    return;
+  }
   const m = sel?.models.pop();
-  if (m) removeObj(m.mesh), refresh();
+  if (!m) return;
+  if (!started) sel.start = sel.models.length; // still deploying: fix the starting strength, not a casualty
+  removeObj(m.mesh);
+  refresh();
 };
 $('clear').onclick = () => (disposeTree(notes), (pending = null));
 for (const b of document.querySelectorAll('#modes button')) {
@@ -479,7 +561,8 @@ for (const b of document.querySelectorAll('#modes button')) {
     for (const o of document.querySelectorAll('#modes button')) o.classList.toggle('on', o === b);
     $('calibLabel').hidden = mode !== 'calib';
     $('terrainOpts').hidden = mode !== 'terrain';
-    $('undo').textContent = mode === 'terrain' ? 'Retirer décor' : 'Retirer fig.';
+    $('objAct').hidden = mode !== 'objective';
+    $('undo').textContent = mode === 'terrain' ? 'Retirer décor' : mode === 'objective' ? 'Retirer pion' : 'Retirer fig.';
     status(HINTS[mode]);
   };
 }

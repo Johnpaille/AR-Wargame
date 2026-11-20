@@ -43,6 +43,11 @@
       <label>M <input id="move" type="number" value="6" min="0" step="1">"</label>
       <label>Portée <input id="range" type="number" value="24" min="0" step="1">"</label>
       <label>OC <input id="oc" type="number" value="2" min="0" step="1"></label>
+      <label>Ld <input id="ld" type="number" value="7" min="2" max="12" step="1">+</label>
+      <select id="uType" aria-label="Type d'unité">
+        <option value="inf">Infanterie/Bête/Nuée</option>
+        <option value="other">Véhicule/Monstre/autre</option>
+      </select>
     </div>
     <div class="row">
       <label>Socle <select id="base"></select></label>
@@ -55,10 +60,18 @@
         </select>
         <label>H <input id="tH" type="number" value="5" min="0">"</label>
       </span>
+      <select id="objAct" hidden aria-label="Action objectif">
+        <option value="place">Poser / retirer</option>
+        <option value="secure">Sécuriser</option>
+      </select>
       <button id="advance">Avance D6</button>
       <button id="charge">Charge 2D6</button>
       <button id="undo">Retirer fig.</button>
       <button id="clear">Effacer traits</button>
+    </div>
+    <div class="row">
+      <button id="phase">T1 J1 · Commandement ›</button>
+      <button id="morale">Moral 2D6</button>
     </div>
     <div class="row" id="modes">
       <button data-mode="place" class="on">Poser</button>

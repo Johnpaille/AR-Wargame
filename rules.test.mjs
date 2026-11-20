@@ -82,6 +82,50 @@ assert.deepEqual(control(obj, [J(1, 2, [at3(3.1)]), J(2, 1, [at3(2)])]), { 1: 0,
 assert.equal(control(obj, [J(1, 1, [at3(1)]), J(2, 1, [at3(1)])]).owner, 0); // tie
 assert.equal(control({ poly: dense.poly }, [J(1, 1, [M(0.05)]), J(2, 5, [tgt])]).owner, 1); // terrain objective
 
+// ---------- keywords, hidden, gone to ground (13.08, 13.09, 13.11.01) ----------
+// a vehicle within an area but fully visible gets no cover; infantry does
+const openArea = { poly: rectFromTaps(P(0.25, -0.05), P(0.35, -0.05), P(0.3, 0.05)), type: 'light' };
+assert.ok(modelCover(shooter, M(0.3), [openArea], true));
+assert.ok(unitCover(shooter, [M(0.3)], [openArea], true));
+// a model inside the area's footprint is partly behind it, so even non-infantry get cover from it
+assert.ok(modelCover(shooter, M(0.3), [openArea], false));
+assert.ok(!modelCover(shooter, M(0.3, 0.3), [openArea], false));
+
+const {
+  hidden, goneToGround, canSee, halfStrength, leadershipPass, endPhaseOwner, RULES,
+} = await import('./rules.js');
+assert.ok(hidden(M(0.3), [openArea], true, false));
+assert.ok(!hidden(M(0.3), [openArea], true, true));     // shot this/previous turn
+assert.ok(!hidden(M(0.3), [openArea], false, false));   // not infantry
+assert.ok(!hidden(M(0.3), [{ ...openArea, type: 'exposed' }], true, false));
+assert.ok(!hidden(M(0.6), [openArea], true, false));    // not within the area
+
+// target hidden in a light area 20" away: visible line, but beyond 15" detection
+const lightHere = { poly: rectFromTaps(P(-0.05, -0.05), P(0.05, -0.05), P(0, 0.05)), type: 'light' };
+const hid = M(0);
+const far20 = M(-(20 * INCH + 2 * r)), near14 = M(-(14 * INCH + 2 * r)), near12 = M(-(11.9 * INCH + 2 * r));
+assert.ok(canSee(far20, hid, [lightHere], false));
+assert.ok(!canSee(far20, hid, [lightHere], true));
+assert.ok(canSee(near14, hid, [lightHere], true));
+// same in a dense area: gone to ground, detection 12"
+const denseHere = { ...lightHere, type: 'dense' };
+assert.ok(goneToGround(near14, hid, [denseHere]));
+assert.ok(!canSee(near14, hid, [denseHere], true));
+assert.ok(canSee(near12, hid, [denseHere], true));
+assert.equal(RULES.detection - RULES.goneToGround, 12);
+
+// ---------- morale ----------
+assert.ok(halfStrength(10, 5) && !halfStrength(10, 6) && !halfStrength(1, 0));
+assert.ok(leadershipPass(7, 7) && !leadershipPass(6, 7));
+// battle-shocked units have OC '-'
+assert.equal(control(obj, [{ side: 1, oc: 2, shocked: true, models: [at3(1)] }, J(2, 1, [at3(1)])]).owner, 2);
+
+// ---------- secured objectives (14.03) ----------
+assert.deepEqual(endPhaseOwner(1, true, { 1: 0, 2: 0, owner: 0 }), { owner: 1, secured: true });   // left, still held
+assert.deepEqual(endPhaseOwner(1, true, { 1: 2, 2: 2, owner: 0 }), { owner: 1, secured: true });   // tie keeps it
+assert.deepEqual(endPhaseOwner(1, true, { 1: 1, 2: 3, owner: 2 }), { owner: 2, secured: false });  // opponent greater
+assert.deepEqual(endPhaseOwner(1, false, { 1: 0, 2: 0, owner: 0 }), { owner: 0, secured: false }); // not secured
+
 // ---------- frame ----------
 const A = P(0.1, 0.2), B = P(0.5, -0.1), p = P(0.3, 0.4);
 const f = toFrame(p, A, B);
