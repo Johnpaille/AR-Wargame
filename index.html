@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>Wargame AR</title>
+<script type="importmap">{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }</script>
+<style>
+  :root { --bg: #111; --fg: #f2f2f2; --btn: rgba(30,30,30,.85); --on: #3fa9f5; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 16px system-ui, sans-serif; }
+  #start { padding: 24px 16px; text-align: center; }
+  #start button { font-size: 20px; padding: 14px 28px; }
+  #ui { position: fixed; inset: 0; pointer-events: none; display: flex; flex-direction: column; justify-content: space-between; }
+  #ui[hidden] { display: none; }
+  #status { pointer-events: auto; margin: 12px; padding: 8px 12px; background: var(--btn); border-radius: 8px; text-align: center; }
+  #panel { pointer-events: auto; padding: 8px; display: grid; gap: 6px; }
+  .row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; justify-content: center; }
+  button, select, input { font: inherit; color: var(--fg); background: var(--btn); border: 1px solid #555; border-radius: 8px; padding: 8px 10px; }
+  input { width: 3.2em; }
+  button.on { background: var(--on); border-color: var(--on); color: #000; }
+  label { background: var(--btn); padding: 2px 6px; border-radius: 8px; }
+  #unitName { background: var(--btn); padding: 8px 10px; border-radius: 8px; font-weight: bold; }
+</style>
+</head>
+<body>
+<div id="start">
+  <h1>Wargame AR</h1>
+  <p id="support">Vérification ARCore…</p>
+  <button id="enter" disabled>Démarrer AR</button>
+  <p>Calibre d'abord avec une règle, puis pose les figurines.</p>
+</div>
+<div id="ui" hidden>
+  <div id="status">Vise la table.</div>
+  <div id="panel">
+    <div class="row">
+      <button id="newUnit">+ Unité</button>
+      <span id="unitName">–</span>
+      <label>M <input id="move" type="number" value="6" min="0" step="1">"</label>
+      <label>Portée <input id="range" type="number" value="24" min="0" step="1">"</label>
+    </div>
+    <div class="row">
+      <label>Socle <select id="base"></select></label>
+      <label id="calibLabel" hidden>Règle <input id="calibLen" type="number" value="6" min="1">"</label>
+      <button id="undo">Retirer fig.</button>
+      <button id="clear">Effacer traits</button>
+    </div>
+    <div class="row" id="modes">
+      <button data-mode="place" class="on">Poser</button>
+      <button data-mode="measure">Mesurer</button>
+      <button data-mode="move">Déplacer</button>
+      <button data-mode="shoot">Tirer</button>
+      <button data-mode="calib">Calibrer</button>
+    </div>
+  </div>
+</div>
+<script type="module" src="app.js"></script>
+</body>
+</html>
