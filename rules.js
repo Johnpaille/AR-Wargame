@@ -119,7 +119,8 @@ export const inRange = (shooters, target, rangeIn, terrains = [], targetHidden =
   shooters.some((s) => within(edgeDist(s, target), rangeIn) && canSee(s, target, terrains, targetHidden));
 
 // ---------- morale (01.06, 01.07, 08.03) ----------
-export const halfStrength = (start, now) => start > 1 && now * 2 <= start;
+// 01.02.01: multi-model units count models; a single-model unit counts its remaining wounds against its W.
+export const halfStrength = (start, now, wounds = 0, w = 1) => (start > 1 ? now * 2 <= start : now === 1 && w > 1 && wounds * 2 <= w);
 export const leadershipPass = (roll2d6, ld) => roll2d6 >= ld;
 
 // 11.04: a charge target must be within 12" and the unit must be able to end engaged (roll + 2").

@@ -14,14 +14,18 @@
   #ui[hidden] { display: none; }
   #status { pointer-events: auto; margin: 12px; padding: 8px 12px; background: var(--btn); border-radius: 8px; text-align: center; }
   #panel { pointer-events: auto; padding: 6px; display: grid; gap: 4px; font-size: 14px; }
+  #panel.folded > .row:not(#modes) { display: none; }
   .row { display: flex; gap: 4px; flex-wrap: wrap; align-items: center; justify-content: center; }
+  .row[hidden], #sheet[hidden] { display: none; }
   button, select, input { font: inherit; color: var(--fg); background: var(--btn); border: 1px solid #555; border-radius: 8px; padding: 6px 8px; }
   input { width: 2.6em; padding: 4px; }
+  input.name { width: 9em; }
   #modes { flex-wrap: nowrap; overflow-x: auto; justify-content: flex-start; }
   #modes button { flex: none; }
   button.on { background: var(--on); border-color: var(--on); color: #000; }
   label { background: var(--btn); padding: 2px 6px; border-radius: 8px; }
-  #unitName { background: var(--btn); padding: 8px 10px; border-radius: 8px; font-weight: bold; }
+  #unitName { font-weight: bold; }
+  #sheet { display: grid; gap: 4px; padding: 6px; background: rgba(0,0,0,.8); border-radius: 10px; }
 </style>
 </head>
 <body>
@@ -36,18 +40,32 @@
 <div id="ui" hidden>
   <div id="status">Vise la table.</div>
   <div id="panel">
+    <!-- unit sheet, opened by tapping the unit name -->
+    <div id="sheet" hidden>
+      <div class="row">
+        <input id="uName" class="name" aria-label="Nom de l'unité">
+        <select id="uType" aria-label="Type d'unité">
+          <option value="inf">Infanterie/Bête/Nuée</option>
+          <option value="other">Véhicule/Monstre/autre</option>
+        </select>
+      </div>
+      <div class="row">
+        <label>M <input id="move" type="number" value="6" min="0" step="1">"</label>
+        <label>OC <input id="oc" type="number" value="2" min="0" step="1"></label>
+        <label>Ld <input id="ld" type="number" value="7" min="2" max="12" step="1">+</label>
+        <label>PV <input id="w" type="number" value="1" min="1" step="1"></label>
+      </div>
+      <div id="weapons"></div>
+      <div class="row">
+        <button id="addWeapon">+ Arme</button>
+        <button id="closeSheet">OK</button>
+      </div>
+    </div>
     <div class="row">
       <select id="side" aria-label="Camp"><option value="1">J1</option><option value="2">J2</option></select>
       <button id="newUnit">+ Unité</button>
-      <span id="unitName">–</span>
-      <label>M <input id="move" type="number" value="6" min="0" step="1">"</label>
-      <label>Portée <input id="range" type="number" value="24" min="0" step="1">"</label>
-      <label>OC <input id="oc" type="number" value="2" min="0" step="1"></label>
-      <label>Ld <input id="ld" type="number" value="7" min="2" max="12" step="1">+</label>
-      <select id="uType" aria-label="Type d'unité">
-        <option value="inf">Infanterie/Bête/Nuée</option>
-        <option value="other">Véhicule/Monstre/autre</option>
-      </select>
+      <button id="unitName">–</button>
+      <select id="weapon" aria-label="Arme"></select>
     </div>
     <div class="row">
       <label>Socle <select id="base"></select></label>
@@ -64,6 +82,7 @@
         <option value="place">Poser / retirer</option>
         <option value="secure">Sécuriser</option>
       </select>
+      <label id="dmgLabel" hidden>Dégâts <input id="dmg" type="number" value="1" min="1" step="1"></label>
       <button id="advance">Avance D6</button>
       <button id="charge">Charge 2D6</button>
       <button id="undo">Retirer fig.</button>
@@ -74,10 +93,12 @@
       <button id="morale">Moral 2D6</button>
     </div>
     <div class="row" id="modes">
+      <button id="fold" aria-label="Replier les outils">▾</button>
       <button data-mode="place" class="on">Poser</button>
       <button data-mode="measure">Mesurer</button>
       <button data-mode="move">Déplacer</button>
       <button data-mode="shoot">Tirer</button>
+      <button data-mode="wound">Blesser</button>
       <button data-mode="terrain">Décor</button>
       <button data-mode="objective">Objectif</button>
       <button data-mode="refs">Repères</button>

@@ -116,6 +116,8 @@ assert.equal(RULES.detection - RULES.goneToGround, 12);
 
 // ---------- morale ----------
 assert.ok(halfStrength(10, 5) && !halfStrength(10, 6) && !halfStrength(1, 0));
+// single-model unit: by wounds (vehicle W11 with 5 left is below half, 6 left is not)
+assert.ok(halfStrength(1, 1, 5, 11) && !halfStrength(1, 1, 6, 11) && !halfStrength(1, 1, 1, 1));
 assert.ok(leadershipPass(7, 7) && !leadershipPass(6, 7));
 // battle-shocked units have OC '-'
 assert.equal(control(obj, [{ side: 1, oc: 2, shocked: true, models: [at3(1)] }, J(2, 1, [at3(1)])]).owner, 2);

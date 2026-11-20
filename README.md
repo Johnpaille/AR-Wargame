@@ -17,7 +17,10 @@ Recommended order: **Calibrer**, **Repères**, then place terrain, objectives an
 
 - **Calibrer**: aim at both ends of a ruler, enter its real length.
 - **Repères**: aim at 2 fixed points of the table (e.g. 2 corners). The game is then saved continuously, relative to those points. Do it again to fix tracking drift, or after restarting the app to resume the saved game. "Nouvelle partie" on the start screen forgets the save.
-- **Poser**: aim at a base and tap. Pick base size first (the reticle previews it). Tap an existing model to select its unit. **+ Unité** starts a new unit, **J1/J2** sets its side, **M / Portée / OC / Ld** its stats, and the type (Infanterie/Bête/Nuée or Véhicule/Monstre/autre) drives cover and Hidden.
+- **Poser**: aim at a base and tap. Pick base size first (the reticle previews it). Tap an existing model to select its unit. **+ Unité** starts a new unit, **J1/J2** sets its side.
+- **Unit sheet** (tap the unit name): name, type (Infanterie/Bête/Nuée or Véhicule/Monstre/autre, drives cover and Hidden), M, OC, Ld, PV (W) and a list of weapons with their ranges. The weapon picker next to the unit name chooses which range the aura, halos and shots use.
+- **Blesser**: set the damage, tap a model. Models with more than 1 PV show their remaining wounds; at 0 the model is removed (excess damage is lost).
+- **▾** folds the tool rows, leaving only the mode bar.
 - **Phase button** (`T1 J1 · Commandement ›`): ends the current phase. Objective control is settled at each phase end; after Combat the next player's turn starts (J1 plays odd turns) and the app lists the units that must take a battle-shock test.
 - **Moral 2D6**: battle-shock roll for the selected unit (2D6 ≥ Ld). Battle-shocked units have OC '-'. The unit label shows `n/start`, `½` at half-strength, `ébranlée`, `cachée`.
 - **Retirer fig.**: before the first phase change it fixes the deployment (starting strength follows); afterwards it is a casualty.
@@ -47,8 +50,9 @@ Recommended order: **Calibrer**, **Repères**, then place terrain, objectives an
 | Level of control (14.02) | sum of OC in range at each phase end, highest wins, tie = nobody |
 | Secured (14.03) | kept until the opponent's level is greater at a phase end |
 | Battle-shock (01.07, 08.03) | 2D6 ≥ Ld; tested if shocked or at/below half-strength; OC '-' |
+| Half-strength (01.02.01) | models ≤ half the starting strength; single-model unit: wounds ≤ half W |
 
-Simplifications: everything is 2D (heights and the 5" vertical limits ignored); sight lines are sampled between 5 points per base; a terrain footprint stands in for its walls, so Solid (13.11, closed gaps under 3") is treated like Obscuring; a shot made in Tirer mode counts as the unit's ranged attack for Hidden; half-strength counts models, not wounds of single-model units; charge reach ignores pathing; which rules secure an objective is up to the players.
+Simplifications: everything is 2D (heights and the 5" vertical limits ignored); sight lines are sampled between 5 points per base; a terrain footprint stands in for its walls, so Solid (13.11, closed gaps under 3") is treated like Obscuring; a shot made in Tirer mode counts as the unit's ranged attack for Hidden; charge reach ignores pathing; which rules secure an objective is up to the players.
 
 ## Desktop testing
 

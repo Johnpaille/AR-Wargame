@@ -7,6 +7,7 @@ http.createServer((req, res) => {
   if (!file.startsWith(root)) return res.writeHead(403).end();
   fs.readFile(file, (err, data) => {
     if (err) return res.writeHead(404).end('not found');
-    res.writeHead(200, { 'Content-Type': types[path.extname(file)] || 'application/octet-stream' }).end(data);
+    // no-store: the phone always gets the latest files after an edit
+    res.writeHead(200, { 'Content-Type': types[path.extname(file)] || 'application/octet-stream', 'Cache-Control': 'no-store' }).end(data);
   });
 }).listen(port, () => console.log(`http://localhost:${port}`));

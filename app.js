@@ -87,6 +87,9 @@ const activeSide = () => (turn % 2 ? 1 : 2);
 const infantry = (u) => u.type === 'inf'; // INFANTRY / BEASTS / SWARM
 const shotRecently = (u) => u.lastShot >= turn - 1; // ranged attacks this turn or the previous one
 const isHidden = (m) => hidden(m, terrains, infantry(m.u), shotRecently(m.u));
+const weaponOf = (u) => u.weapons[u.weapon] ?? { name: '–', range: 0 };
+const rangeOf = (u) => weaponOf(u).range;
+const half = (u) => halfStrength(u.start, u.models.length, u.models[0]?.wounds, u.w);
 
 function disposeTree(o) {
   o.traverse((c) => { c.geometry?.dispose(); if (c.material && !SHARED.has(c.material)) { c.material.map?.dispose(); c.material.dispose(); } });
@@ -118,7 +121,8 @@ function label(text, pos, color = '#fff') {
 // ---------- units ----------
 function makeUnit(props) {
   const u = {
-    oc: 2, ld: 7, type: 'inf', shocked: false, start: 0, lastShot: -9, // defaults also cover saves from older versions
+    oc: 2, ld: 7, w: 1, type: 'inf', shocked: false, start: 0, lastShot: -9, weapon: 0, // defaults also cover saves from older versions
+    weapons: [{ name: 'Arme 1', range: props.range ?? 24 }],
     ...props, roll: null, models: [], group: new THREE.Group(), aura: new THREE.Group(),
   };
   u.group.add(u.aura);
@@ -129,7 +133,7 @@ function makeUnit(props) {
 function newUnit() {
   const u = makeUnit({
     name: `Unité ${units.length + 1}`, side: Number($('side').value), color: COLORS[units.length % COLORS.length],
-    move: 6, range: 24, oc: 2, ld: 7, type: $('uType').value, shocked: false, start: 0, lastShot: -9,
+    move: 6, type: $('uType').value,
   });
   selectUnit(u);
   return u;
@@ -139,21 +143,53 @@ function selectUnit(u) {
   sel = u;
   $('side').value = u.side;
   $('move').value = u.move;
-  $('range').value = u.range;
   $('oc').value = u.oc;
   $('ld').value = u.ld;
+  $('w').value = u.w;
+  $('uName').value = u.name;
   $('uType').value = u.type;
+  renderWeapons();
   refresh();
 }
-function addModel(u, p, r = Number($('base').value) / 2000) {
+// Weapon quick-switch in the main panel + editable list in the unit sheet.
+function renderWeapons() {
+  const sw = $('weapon');
+  sw.replaceChildren(...(sel?.weapons ?? []).map((wp, i) => new Option(`${wp.name} ${wp.range}"`, i, false, i === sel.weapon)));
+  const list = $('weapons');
+  list.replaceChildren();
+  sel?.weapons.forEach((wp, i) => {
+    const row = document.createElement('div');
+    row.className = 'row';
+    const name = Object.assign(document.createElement('input'), { className: 'name', value: wp.name, ariaLabel: 'Nom de l\'arme' });
+    const range = Object.assign(document.createElement('input'), { type: 'number', min: 0, value: wp.range, ariaLabel: 'Portée' });
+    const del = Object.assign(document.createElement('button'), { textContent: '✕', ariaLabel: 'Supprimer l\'arme' });
+    name.onchange = () => ((wp.name = name.value || wp.name), renderWeapons());
+    range.onchange = () => ((wp.range = Number(range.value) || 0), renderWeapons(), refresh());
+    del.onclick = () => {
+      if (sel.weapons.length < 2) return status('Une unité garde au moins une arme');
+      sel.weapons.splice(i, 1);
+      sel.weapon = Math.min(sel.weapon, sel.weapons.length - 1);
+      renderWeapons();
+      refresh();
+    };
+    row.append(name, range, '"', del);
+    list.append(row);
+  });
+}
+function addModel(u, p, r = Number($('base').value) / 2000, wounds = u.w) {
   const mesh = new THREE.Mesh(ringGeo(r - 0.002, r), new THREE.MeshBasicMaterial({ color: u.color }));
   const halo = new THREE.Mesh(ringGeo(r + 0.003, r + 0.006), new THREE.MeshBasicMaterial({ color: WHITE }));
   halo.visible = false;
   mesh.add(halo);
   mesh.position.set(p.x, p.y + 0.001, p.z);
   u.group.add(mesh);
-  u.models.push({ x: p.x, y: p.y, z: p.z, r, mesh, halo, u });
+  u.models.push({ x: p.x, y: p.y, z: p.z, r, wounds, mesh, halo, tag: null, tagKey: '', u });
   u.start = Math.max(u.start, u.models.length); // starting strength
+}
+
+function removeModel(m) {
+  m.u.models.splice(m.u.models.indexOf(m), 1);
+  removeObj(m.mesh);
 }
 
 // ---------- terrain & objectives ----------
@@ -206,7 +242,15 @@ function refresh() {
       m.mesh.material.opacity = hid ? 0.4 : 1;
       // Rightful-Ruler style halo on enemy models: shootable (range + visible), or reachable by the charge roll.
       const enemy = !!sel && u.side !== sel.side;
-      m.halo.visible = enemy && (sel.roll?.kind === 'charge' ? chargeReach(sel.models, m, sel.roll.n) : inRange(sel.models, m, sel.range, terrains, hid));
+      m.halo.visible = enemy && (sel.roll?.kind === 'charge' ? chargeReach(sel.models, m, sel.roll.n) : inRange(sel.models, m, rangeOf(sel), terrains, hid));
+      // remaining wounds above damaged multi-wound models
+      const key = m.wounds < u.w ? `${m.wounds}/${u.w} PV` : '';
+      if (key !== m.tagKey) {
+        if (m.tag) removeObj(m.tag);
+        m.tag = key ? label(key, new THREE.Vector3(0, 0.03, 0), '#ff9500') : null;
+        if (m.tag) m.mesh.add(m.tag);
+        m.tagKey = key;
+      }
     }
     disposeTree(u.aura);
   }
@@ -214,7 +258,7 @@ function refresh() {
     rangeMat.color.setHex(sel.color);
     const mv = allowedMove(sel);
     for (const m of sel.models) {
-      for (const [R, mat, order] of [[m.r + mv * INCH, moveMat, 1], [m.r + sel.range * INCH, rangeMat, 2]]) {
+      for (const [R, mat, order] of [[m.r + mv * INCH, moveMat, 1], [m.r + rangeOf(sel) * INCH, rangeMat, 2]]) {
         const d = new THREE.Mesh(new THREE.CircleGeometry(R, 64).rotateX(-Math.PI / 2), mat);
         d.position.set(m.x, m.y + 0.0005, m.z);
         d.renderOrder = order;
@@ -226,7 +270,7 @@ function refresh() {
     const flags = [
       roll,
       nBad ? ' – cohésion !' : '',
-      halfStrength(sel.start, sel.models.length) ? ' – ½' : '',
+      half(sel) ? ' – ½' : '',
       sel.shocked ? ' – ébranlée' : '',
       sel.models.length && sel.models.every(isHidden) ? ' – cachée' : '',
     ].join('');
@@ -286,8 +330,8 @@ function snapshot() {
   return {
     d: Math.hypot(refs.B.x - refs.A.x, refs.B.z - refs.A.z),
     turn, phase, started,
-    units: units.map(({ name, side, color, move, range, oc, ld, type, shocked, start, lastShot, models }) =>
-      ({ name, side, color, move, range, oc, ld, type, shocked, start, lastShot, models: models.map((m) => ({ ...f(m), r: m.r })) })),
+    units: units.map(({ name, side, color, move, oc, ld, w, type, shocked, start, lastShot, weapons, weapon, models }) =>
+      ({ name, side, color, move, oc, ld, w, type, shocked, start, lastShot, weapons, weapon, models: models.map((m) => ({ ...f(m), r: m.r, wounds: m.wounds })) })),
     terrains: terrains.map((t) => ({ poly: t.poly.map(f), type: t.type, h: t.h, objective: t.objective, owner: t.owner, secured: t.secured })),
     objectives: objectives.map((o) => ({ ...f(o), owner: o.owner, secured: o.secured })),
   };
@@ -299,6 +343,8 @@ function clearAll() {
   units.length = terrains.length = objectives.length = 0;
   turn = 1; phase = 0; started = false;
   sel = null;
+  $('sheet').hidden = true;
+  renderWeapons();
   pending = null;
   disposeTree(notes);
 }
@@ -309,7 +355,7 @@ function restore(s) {
   for (const su of s.units) {
     const { models, ...props } = su;
     const u = makeUnit(props);
-    for (const m of models) addModel(u, g(m), m.r);
+    for (const m of models) addModel(u, g(m), m.r, m.wounds ?? u.w);
   }
   for (const t of s.terrains) addTerrain(t.poly.map(g), refs.A.y, t.type, t.h, t.objective, t.owner, t.secured);
   for (const o of s.objectives) addObjective(g(o), o.owner, o.secured);
@@ -370,12 +416,12 @@ const handlers = {
       if (!m) return status('Vise un tireur');
       pending = m;
       selectUnit(m.u);
-      return status(`Vise la cible (portée ${m.u.range}")`);
+      return status(`Vise la cible (${weaponOf(m.u).name} ${rangeOf(m.u)}")`);
     }
     const a = pending, b = target(p), d = edgeDist(a, b);
     const hid = !!b.u && isHidden(b);
     const los = canSee(a, b, terrains), vis = canSee(a, b, terrains, hid);
-    const inR = toIn(d) <= a.u.range + 1e-6;
+    const inR = toIn(d) <= rangeOf(a.u) + 1e-6;
     const cover = vis && (b.u ? unitCover(a, b.u.models, terrains, infantry(b.u)) : modelCover(a, b, terrains));
     pending = null;
     disposeTree(notes);
@@ -387,8 +433,19 @@ const handlers = {
     }
     status(!los ? `Pas de ligne de vue (${fmt(d)})`
       : !vis ? `Cible cachée : hors de sa portée de détection (${fmt(d)})`
-      : !inR ? `Hors de portée : ${fmt(d)} > ${a.u.range}"`
+      : !inR ? `Hors de portée : ${fmt(d)} > ${weaponOf(a.u).name} ${rangeOf(a.u)}"`
       : `Tir à ${fmt(d)}${cover ? ' – unité à couvert : CT -1' : ''}`);
+  },
+  // Allocate damage to one model; excess damage is lost, a model at 0 wounds is destroyed.
+  wound(p) {
+    const m = pick(p);
+    if (!m) return status('Vise une figurine');
+    const dmg = Math.max(1, Number($('dmg').value) || 1);
+    m.wounds -= dmg;
+    if (m.wounds > 0) return refresh(), status(`${uname(m.u)} : figurine à ${m.wounds}/${m.u.w} PV`);
+    removeModel(m);
+    refresh();
+    status(`${uname(m.u)} : figurine détruite (${m.u.models.length}/${m.u.start})${half(m.u) ? ' – demi-effectif, test de moral au prochain Commandement' : ''}`);
   },
   terrain(p) {
     if (!pending) disposeTree(notes);
@@ -468,6 +525,7 @@ const HINTS = {
   measure: 'Mesurer : vise 2 points ou figurines (socle à socle).',
   move: 'Déplacer : vise la figurine, puis sa nouvelle position.',
   shoot: 'Tirer : vise le tireur, puis la cible.',
+  wound: 'Blesser : règle les dégâts, puis tape une figurine. À 0 PV elle est retirée.',
   terrain: 'Décor : vise 2 coins d\'un côté, puis le côté opposé.',
   objective: 'Objectif : tape pour poser un pion, dans un décor pour en faire un objectif, sur un pion pour le retirer. Choix "Sécuriser" pour verrouiller un objectif.',
   refs: 'Repères : vise 2 points fixes de la table (ex. 2 coins). Refais-le pour recaler ou reprendre une partie.',
@@ -492,10 +550,33 @@ $('newUnit').onclick = () => (newUnit(), status(`${uname(sel)} créée : pose se
 const unitInput = (id, key) => ($(id).onchange = () => sel && ((sel[key] = Number($(id).value) || 0), refresh()));
 unitInput('side', 'side');
 unitInput('move', 'move');
-unitInput('range', 'range');
 unitInput('oc', 'oc');
 unitInput('ld', 'ld');
+// W: changing it heals models to full / caps them; done while setting up the unit
+$('w').onchange = () => {
+  if (!sel) return;
+  sel.w = Math.max(1, Number($('w').value) || 1);
+  for (const m of sel.models) m.wounds = sel.w;
+  refresh();
+};
+$('uName').onchange = () => sel && ((sel.name = $('uName').value || sel.name), refresh());
 $('uType').onchange = () => sel && ((sel.type = $('uType').value), refresh());
+$('weapon').onchange = () => sel && ((sel.weapon = Number($('weapon').value)), refresh());
+$('addWeapon').onclick = () => {
+  if (!sel) return;
+  sel.weapons.push({ name: `Arme ${sel.weapons.length + 1}`, range: 12 });
+  sel.weapon = sel.weapons.length - 1;
+  renderWeapons();
+  refresh();
+};
+$('unitName').onclick = () => (sel ? ($('sheet').hidden = !$('sheet').hidden) : status('Sélectionne ou crée une unité'));
+$('closeSheet').onclick = () => ($('sheet').hidden = true);
+$('fold').onclick = () => {
+  const folded = $('panel').classList.toggle('folded');
+  $('fold').textContent = folded ? '▴' : '▾';
+  store.set('folded', folded ? '1' : null);
+};
+if (store.get('folded')) $('fold').click();
 
 // End of phase: settle objective control (14.02, 14.03), then move on. After the Fight phase, the next player's turn starts.
 $('phase').onclick = () => {
@@ -509,7 +590,7 @@ $('phase').onclick = () => {
   refresh();
   if (phase !== 0) return status(`${PHASES[phase]} (J${activeSide()}) – contrôle des objectifs mis à jour`);
   // 08.03 battle-shock step: the active player tests units that are battle-shocked or at/below half-strength
-  const due = units.filter((u) => u.side === activeSide() && (u.shocked || halfStrength(u.start, u.models.length)));
+  const due = units.filter((u) => u.side === activeSide() && (u.shocked || half(u)));
   status(`Tour ${turn}, J${activeSide()} – ` + (due.length ? `tests de moral : ${due.map((u) => u.name).join(', ')}` : 'aucun test de moral'));
 };
 // Battle-shock roll (01.07): 2D6 >= Ld, else battle-shocked (OC '-').
@@ -547,18 +628,19 @@ $('undo').onclick = () => {
     if (o) { if (o.tag) removeObj(o.tag); removeObj(o.mesh); refresh(); }
     return;
   }
-  const m = sel?.models.pop();
+  const m = sel?.models.at(-1);
   if (!m) return;
+  removeModel(m);
   if (!started) sel.start = sel.models.length; // still deploying: fix the starting strength, not a casualty
-  removeObj(m.mesh);
   refresh();
 };
 $('clear').onclick = () => (disposeTree(notes), (pending = null));
-for (const b of document.querySelectorAll('#modes button')) {
+for (const b of document.querySelectorAll('#modes [data-mode]')) {
   b.onclick = () => {
     mode = b.dataset.mode;
     pending = null;
-    for (const o of document.querySelectorAll('#modes button')) o.classList.toggle('on', o === b);
+    for (const o of document.querySelectorAll('#modes [data-mode]')) o.classList.toggle('on', o === b);
+    $('dmgLabel').hidden = mode !== 'wound';
     $('calibLabel').hidden = mode !== 'calib';
     $('terrainOpts').hidden = mode !== 'terrain';
     $('objAct').hidden = mode !== 'objective';
