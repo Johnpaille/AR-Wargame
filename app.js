@@ -16,6 +16,11 @@ const store = {
   set: (key, v) => { try { v == null ? localStorage.removeItem(key) : localStorage.setItem(key, v); } catch {} },
 };
 
+// Multiplayer: open the page with ?room=name on each phone; the game state is relayed by serve.js.
+const room = new URLSearchParams(location.search).get('room');
+const clientId = Math.random().toString(36).slice(2);
+let applyingRemote = false, remoteState = null, sendTimer = 0, lastSync = '';
+
 // ---------- three.js / WebXR setup ----------
 const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, stencil: true });
 renderer.setPixelRatio(devicePixelRatio);
@@ -50,21 +55,65 @@ const notes = new THREE.Group(); // measure lines + labels
 const refMarks = new THREE.Group(); // reference points
 root.add(notes, refMarks);
 
+// ---------- depth occlusion (WebXR depth-sensing, CPU path, optional) ----------
+// Virtual fragments farther than the real surface ARCore measured are dropped, so rings and auras hide behind real minis and terrain.
+const occ = { uDepth: { value: null }, uUvT: { value: new THREE.Matrix4() }, uVp: { value: new THREE.Vector4(0, 0, 1, 1) }, uOn: { value: 0 } };
+let depthTex = null, occlusionOn = false, xrSession = null;
+function occlude(mat) {
+  mat.onBeforeCompile = (sh) => {
+    Object.assign(sh.uniforms, occ);
+    sh.vertexShader = 'varying float vOccZ;\n' + sh.vertexShader.replace('#include <project_vertex>', '#include <project_vertex>\n vOccZ = -mvPosition.z;');
+    sh.fragmentShader = 'uniform sampler2D uDepth; uniform mat4 uUvT; uniform vec4 uVp; uniform float uOn; varying float vOccZ;\n'
+      + sh.fragmentShader.replace('#include <clipping_planes_fragment>', `#include <clipping_planes_fragment>
+  if (uOn > 0.5) {
+    vec2 uv = (gl_FragCoord.xy - uVp.xy) / uVp.zw;
+    uv.y = 1.0 - uv.y; // normalized view coords start top-left
+    float real = texture2D(uDepth, (uUvT * vec4(uv, 0.0, 1.0)).xy).r;
+    if (real > 0.0 && vOccZ > real + 0.02) discard; // 2 cm tolerance so the table itself does not hide the rings
+  }`);
+  };
+  return mat;
+}
+function updateDepth(frame, ref) {
+  occ.uOn.value = 0;
+  if (!occlusionOn) return;
+  const view = frame.getViewerPose(ref)?.views[0];
+  let info = null;
+  try { info = view && frame.getDepthInformation(view); } catch { return; }
+  if (!info) return;
+  const { width: w, height: h } = info;
+  const src = xrSession.depthDataFormat === 'float32' ? new Float32Array(info.data) : new Uint16Array(info.data);
+  if (!depthTex || depthTex.image.width !== w || depthTex.image.height !== h) {
+    depthTex?.dispose();
+    depthTex = new THREE.DataTexture(new Float32Array(w * h), w, h, THREE.RedFormat, THREE.FloatType);
+    depthTex.minFilter = depthTex.magFilter = THREE.NearestFilter;
+    occ.uDepth.value = depthTex;
+  }
+  const dst = depthTex.image.data, s = info.rawValueToMeters;
+  for (let i = 0; i < dst.length; i++) dst[i] = src[i] * s;
+  depthTex.needsUpdate = true;
+  occ.uUvT.value.fromArray(info.normDepthBufferFromNormView.matrix);
+  const vp = xrSession.renderState.baseLayer.getViewport(view);
+  occ.uVp.value.set(vp.x, vp.y, vp.width, vp.height);
+  occ.uOn.value = 1;
+}
+
 // Aura discs: stencil makes overlapping discs of one unit draw as a single union, no alpha stacking.
-const auraMat = (color, ref, opacity) => new THREE.MeshBasicMaterial({
+const auraMat = (color, ref, opacity) => occlude(new THREE.MeshBasicMaterial({
   color, transparent: true, opacity, depthWrite: false,
   stencilWrite: true, stencilRef: ref, stencilFunc: THREE.NotEqualStencilFunc, stencilZPass: THREE.ReplaceStencilOp,
-});
+}));
 const moveMat = auraMat(GREEN, 1, 0.25);
 const rangeMat = auraMat(WHITE, 2, 0.12);
-const terrainMat = (color, opacity) => new THREE.MeshBasicMaterial({ color, transparent: true, opacity, depthWrite: false });
+const terrainMat = (color, opacity) => occlude(new THREE.MeshBasicMaterial({ color, transparent: true, opacity, depthWrite: false }));
+const basic = (color) => occlude(new THREE.MeshBasicMaterial({ color }));
 const TERRAIN = {
   dense: { mat: terrainMat(0x8b5a2b, 0.35), label: 'dense' },
   light: { mat: terrainMat(0xc8a165, 0.25), label: 'léger' },
   exposed: { mat: terrainMat(0x9b9b9b, 0.15), label: 'exposé' },
 };
-const edgeMat = new THREE.LineBasicMaterial({ color: WHITE });
-const objEdgeMat = new THREE.LineBasicMaterial({ color: GOLD });
+const edgeMat = occlude(new THREE.LineBasicMaterial({ color: WHITE }));
+const objEdgeMat = occlude(new THREE.LineBasicMaterial({ color: GOLD }));
 const SHARED = new Set([moveMat, rangeMat, edgeMat, objEdgeMat, ...Object.values(TERRAIN).map((t) => t.mat)]);
 const ringGeo = (r0, r1) => new THREE.RingGeometry(r0, r1, 48).rotateX(-Math.PI / 2);
 const boltGeo = new THREE.SphereGeometry(0.005, 8, 8);
@@ -123,7 +172,7 @@ function makeUnit(props) {
   const u = {
     oc: 2, ld: 7, w: 1, type: 'inf', shocked: false, start: 0, lastShot: -9, weapon: 0, // defaults also cover saves from older versions
     weapons: [{ name: 'Arme 1', range: props.range ?? 24 }],
-    ...props, roll: null, models: [], group: new THREE.Group(), aura: new THREE.Group(),
+    roll: null, ...props, models: [], group: new THREE.Group(), aura: new THREE.Group(),
   };
   u.group.add(u.aura);
   root.add(u.group);
@@ -177,8 +226,8 @@ function renderWeapons() {
   });
 }
 function addModel(u, p, r = Number($('base').value) / 2000, wounds = u.w) {
-  const mesh = new THREE.Mesh(ringGeo(r - 0.002, r), new THREE.MeshBasicMaterial({ color: u.color }));
-  const halo = new THREE.Mesh(ringGeo(r + 0.003, r + 0.006), new THREE.MeshBasicMaterial({ color: WHITE }));
+  const mesh = new THREE.Mesh(ringGeo(r - 0.002, r), basic(u.color));
+  const halo = new THREE.Mesh(ringGeo(r + 0.003, r + 0.006), basic(WHITE));
   halo.visible = false;
   mesh.add(halo);
   mesh.position.set(p.x, p.y + 0.001, p.z);
@@ -212,8 +261,8 @@ function setTerrainObjective(t, on) {
 }
 function addObjective(p, owner = 0, secured = false) {
   const r = RULES.objectiveMm / 2000;
-  const mesh = new THREE.Mesh(new THREE.CircleGeometry(r, 32).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ color: GOLD }));
-  mesh.add(new THREE.Mesh(ringGeo(r + RULES.objective * INCH - 0.002, r + RULES.objective * INCH), new THREE.MeshBasicMaterial({ color: GOLD })));
+  const mesh = new THREE.Mesh(new THREE.CircleGeometry(r, 32).rotateX(-Math.PI / 2), basic(GOLD));
+  mesh.add(new THREE.Mesh(ringGeo(r + RULES.objective * INCH - 0.002, r + RULES.objective * INCH), basic(GOLD)));
   mesh.position.set(p.x, p.y + 0.001, p.z);
   root.add(mesh);
   objectives.push({ x: p.x, y: p.y, z: p.z, r, owner, secured, mesh, tag: null, top: new THREE.Vector3(p.x, p.y + 0.04, p.z) });
@@ -326,30 +375,35 @@ function animate() {
 
 // ---------- save / restore in the reference frame ----------
 function snapshot() {
-  const f = (p) => toFrame(p, refs.A, refs.B);
+  // rounded to 0.1 mm so the same table gives the same JSON on both phones (no float-noise echoes)
+  const f = (p) => {
+    const { u, v } = toFrame(p, refs.A, refs.B);
+    return { u: Math.round(u * 1e4) / 1e4, v: Math.round(v * 1e4) / 1e4 };
+  };
   return {
     d: Math.hypot(refs.B.x - refs.A.x, refs.B.z - refs.A.z),
     turn, phase, started,
-    units: units.map(({ name, side, color, move, oc, ld, w, type, shocked, start, lastShot, weapons, weapon, models }) =>
-      ({ name, side, color, move, oc, ld, w, type, shocked, start, lastShot, weapons, weapon, models: models.map((m) => ({ ...f(m), r: m.r, wounds: m.wounds })) })),
+    units: units.map(({ name, side, color, move, oc, ld, w, type, shocked, start, lastShot, weapons, weapon, roll, models }) =>
+      ({ name, side, color, move, oc, ld, w, type, shocked, start, lastShot, weapons, weapon, roll, models: models.map((m) => ({ ...f(m), r: m.r, wounds: m.wounds })) })),
     terrains: terrains.map((t) => ({ poly: t.poly.map(f), type: t.type, h: t.h, objective: t.objective, owner: t.owner, secured: t.secured })),
     objectives: objectives.map((o) => ({ ...f(o), owner: o.owner, secured: o.secured })),
   };
 }
-function clearAll() {
+function clearAll(keepView = false) {
   for (const u of units) removeObj(u.group);
   for (const t of terrains) { if (t.tag) removeObj(t.tag); removeObj(t.mesh); }
   for (const o of objectives) { if (o.tag) removeObj(o.tag); removeObj(o.mesh); }
   units.length = terrains.length = objectives.length = 0;
   turn = 1; phase = 0; started = false;
   sel = null;
+  pending = null;
+  if (keepView) return; // remote update: keep the measure lines and the open sheet
   $('sheet').hidden = true;
   renderWeapons();
-  pending = null;
   disposeTree(notes);
 }
-function restore(s) {
-  clearAll();
+function restore(s, keepView = false) {
+  clearAll(keepView);
   const g = (q) => ({ ...fromFrame(q, refs.A, refs.B), y: refs.A.y });
   ({ turn = 1, phase = 0, started = false } = s);
   for (const su of s.units) {
@@ -357,18 +411,59 @@ function restore(s) {
     const u = makeUnit(props);
     for (const m of models) addModel(u, g(m), m.r, m.wounds ?? u.w);
   }
-  for (const t of s.terrains) addTerrain(t.poly.map(g), refs.A.y, t.type, t.h, t.objective, t.owner, t.secured);
+  for (const t of s.terrains) addTerrain(t.poly.map(g), refs.A.y, TERRAIN[t.type] ? t.type : 'dense', Number(t.h) || 0, t.objective, t.owner, t.secured);
   for (const o of s.objectives) addObjective(g(o), o.owner, o.secured);
   refresh();
 }
 function autosave() {
-  if (refs) store.set('game', JSON.stringify(snapshot()));
+  if (!refs) return;
+  store.set('game', JSON.stringify(snapshot()));
+  // an empty table is never broadcast, so joining a room can't wipe the other player's game
+  if (!room || applyingRemote || !(units.length || terrains.length || objectives.length)) return;
+  clearTimeout(sendTimer);
+  sendTimer = setTimeout(() => {
+    if (!refs) return;
+    // only real game changes are sent: a selection change must not overwrite the other player's newer state
+    const json = JSON.stringify(snapshot());
+    if (json === lastSync) return;
+    lastSync = json;
+    fetch(`/state?room=${encodeURIComponent(room)}`, { method: 'POST', body: `{"from":${JSON.stringify(clientId)},"state":${json}}` })
+      .then((r) => r.ok || status(`Synchro : envoi refusé (${r.status})`))
+      .catch(() => status('Synchro : envoi impossible'));
+  }, 150);
+}
+// Apply the other player's state, keeping this player's selection and half-finished 2-tap action.
+function applyRemote(s) {
+  const idx = (m) => (m?.u ? [units.indexOf(m.u), m.u.models.indexOf(m)] : null);
+  const selIdx = units.indexOf(sel), pend = idx(pending), keep = pending && !pend ? pending : null;
+  applyingRemote = true;
+  try {
+    restore(s, true);
+    lastSync = JSON.stringify(snapshot());
+    if (units[selIdx]) selectUnit(units[selIdx]);
+    pending = pend ? units[pend[0]]?.models[pend[1]] ?? null : keep;
+  } catch (err) {
+    status(`Synchro : état reçu invalide (${err.message})`);
+  } finally {
+    applyingRemote = false;
+  }
+}
+if (room) {
+  const es = new EventSource(`/events?room=${encodeURIComponent(room)}`);
+  es.onmessage = (e) => {
+    let msg;
+    try { msg = JSON.parse(e.data); } catch { return; }
+    if (msg.from === clientId || !Array.isArray(msg.state?.units)) return;
+    if (!refs) return (remoteState = msg.state), status('Synchro : partie reçue, pose les Repères pour l\'afficher');
+    applyRemote(msg.state);
+  };
+  es.onerror = () => status('Synchro : connexion perdue, reconnexion…');
 }
 function drawRefs() {
   disposeTree(refMarks);
   for (const p of [refs.A, refs.B]) {
     dot(p, refMarks, GOLD);
-    const ring = new THREE.Mesh(ringGeo(0.008, 0.011), new THREE.MeshBasicMaterial({ color: GOLD }));
+    const ring = new THREE.Mesh(ringGeo(0.008, 0.011), basic(GOLD));
     ring.position.set(p.x, p.y + 0.002, p.z);
     refMarks.add(ring);
   }
@@ -498,7 +593,9 @@ const handlers = {
     disposeTree(notes);
     if (dist < 0.05) return status('Repères trop proches (5 cm minimum)');
     const before = refs ? snapshot() : null;
-    const saved = !before && !units.length && !terrains.length && !objectives.length ? JSON.parse(store.get('game') || 'null') : null;
+    // in a room, the shared game wins over this phone's own save
+    const saved = !before && !units.length && !terrains.length && !objectives.length ? remoteState ?? JSON.parse(store.get('game') || 'null') : null;
+    remoteState = null;
     refs = { A, B };
     drawRefs();
     const s = before ?? saved;
@@ -654,9 +751,18 @@ $('ui').addEventListener('beforexrselect', (e) => e.target.closest('#panel, #sta
 const savedGame = store.get('game');
 $('saved').hidden = !savedGame;
 $('forget').onclick = () => { store.set('game', null); $('saved').hidden = true; };
+$('occl').checked = !!store.get('occl');
 
 // Desktop testing without AR: open index.html#debug, then call dbg.tap(mode, x, z) from the console (metres).
-if (location.hash === '#debug') window.dbg = { handlers, units, terrains, objectives, store, tap: (m, x, z) => handlers[m]({ x, y: 0, z }), setMode: (m) => document.querySelector(`[data-mode=${m}]`).click() };
+if (location.hash === '#debug') {
+  window.dbg = {
+    handlers, units, terrains, objectives, store, occ,
+    tap: (m, x, z) => handlers[m]({ x, y: 0, z }),
+    setMode: (m) => document.querySelector(`[data-mode=${m}]`).click(),
+    compile: () => renderer.compile(scene, camera), // forces every shader (incl. occlusion patch) to build
+    renderer, scene, THREE,
+  };
+}
 
 // ---------- session ----------
 let hitSource = null;
@@ -668,22 +774,28 @@ let hitSource = null;
 
 $('enter').onclick = async () => {
   let session;
+  const wantDepth = $('occl').checked;
+  store.set('occl', wantDepth ? '1' : null);
   try {
     session = await navigator.xr.requestSession('immersive-ar', {
       requiredFeatures: ['hit-test'],
-      optionalFeatures: ['dom-overlay', 'anchors'],
+      optionalFeatures: ['dom-overlay', 'anchors', ...(wantDepth ? ['depth-sensing'] : [])],
       domOverlay: { root: $('ui') },
+      ...(wantDepth && { depthSensing: { usagePreference: ['cpu-optimized'], dataFormatPreference: ['luminance-alpha', 'float32'] } }),
     });
   } catch (err) {
     return ($('support').textContent = `Échec du démarrage AR : ${err.message}`);
   }
+  xrSession = session;
+  // enabledFeatures is missing on older Chrome: then trust the request, updateDepth tolerates a missing depth map
+  occlusionOn = wantDepth && (session.enabledFeatures?.includes('depth-sensing') ?? true);
   await renderer.xr.setSession(session);
   const viewer = await session.requestReferenceSpace('viewer');
   hitSource = await session.requestHitTestSource({ space: viewer });
   session.addEventListener('select', onSelect);
   session.addEventListener('end', () => {
     // the next session has a new world origin: positions only survive through the saved reference frame
-    hitSource = null; anchor = null; rootPose = null; refs = null;
+    hitSource = null; anchor = null; rootPose = null; refs = null; xrSession = null; occlusionOn = false; occ.uOn.value = 0;
     clearAll();
     disposeTree(refMarks);
     $('saved').hidden = !store.get('game');
@@ -691,7 +803,9 @@ $('enter').onclick = async () => {
   });
   $('start').hidden = true;
   $('ui').hidden = false;
-  status(store.get('game') ? 'Partie sauvegardée : va en mode Repères et vise les 2 mêmes points pour la reprendre.' : 'Conseil : Calibrer, puis Repères, puis Poser.');
+  status((wantDepth && !occlusionOn ? 'Occlusion non disponible sur ce téléphone. ' : '')
+    + (room ? `Partie partagée « ${room} » : pose les Repères sur les mêmes points que l'adversaire. ` : '')
+    + (store.get('game') || remoteState ? 'Partie à reprendre : mode Repères, vise les 2 mêmes points.' : 'Conseil : Calibrer, puis Repères, puis Poser.'));
 };
 
 renderer.setAnimationLoop((t, frame) => {
@@ -709,6 +823,7 @@ renderer.setAnimationLoop((t, frame) => {
       const s = mode === 'place' ? (Number($('base').value) / 2000) * k : 0.01;
       reticle.matrix.copy(hitPose).multiply(tmp.makeScale(s, s, s));
     }
+    updateDepth(frame, ref);
   }
   animate();
   renderer.render(scene, camera);

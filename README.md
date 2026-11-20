@@ -54,10 +54,23 @@ Recommended order: **Calibrer**, **Repères**, then place terrain, objectives an
 
 Simplifications: everything is 2D (heights and the 5" vertical limits ignored); sight lines are sampled between 5 points per base; a terrain footprint stands in for its walls, so Solid (13.11, closed gaps under 3") is treated like Obscuring; a shot made in Tirer mode counts as the unit's ranged attack for Hidden; charge reach ignores pathing; which rules secure an objective is up to the players.
 
+## Two phones (shared game)
+
+Open the page with the same room on both phones, e.g. `http://<PC>:8000/?room=partie1`. `serve.js` relays the game state between them.
+
+- Each player sets the **Repères** on the same 2 physical points: positions are exchanged in that table frame, so each phone sees the other's moves in the right place.
+- Only real game changes are sent (not selections); if both players edit at the same instant, the last one wins.
+- The second phone also needs a secure origin for WebXR: either a second USB cable + `adb reverse`, or on that phone `chrome://flags/#unsafely-treat-insecure-origin-as-secure` with `http://<PC IP>:8000`.
+- The relay has no authentication: use it on a home network only. `serve.js` never serves dot-folders (`.git`, `.claude`).
+
+## Depth occlusion (experimental)
+
+Tick **Occlusion par la profondeur** before starting AR. With the ARCore Depth API (the Redmi Note 11 Pro supports it), rings, auras, terrain and objectives are hidden where a real object stands in front of them (2 cm tolerance so the table itself does not hide them). If the phone does not provide depth, the app says so and works as before.
+
 ## Desktop testing
 
-Open `http://localhost:8000/#debug` and drive the handlers from the console, e.g. `dbg.tap('place', 0.1, 0.1)` (metres).
+Open `http://localhost:8000/#debug` and drive the handlers from the console, e.g. `dbg.tap('place', 0.1, 0.1)` (metres). Two tabs with `?room=x#debug` test the shared game.
 
 ## Not done yet
 
-Depth occlusion, multiplayer sharing, ArUco base tracking, model/terrain heights for sight lines.
+ArUco base tracking, model/terrain heights for sight lines.
