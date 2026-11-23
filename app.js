@@ -4,6 +4,7 @@ import {
   inArea, modelCover, unitCover, control, toFrame, fromFrame, d6,
   hidden, canSee, halfStrength, leadershipPass, endPhaseOwner, PHASES,
 } from './rules.js';
+import { parseArmyList, linesFromItems, fxKind } from './armylist.js';
 
 const $ = (id) => document.getElementById(id);
 const COLORS = [0x3fa9f5, 0xf5a623, 0xbd10e0, 0x50e3c2, 0xf8e71c, 0xff6f91, 0x9b9b9b, 0x7ed321];
@@ -117,8 +118,6 @@ const edgeMat = occlude(new THREE.LineBasicMaterial({ color: WHITE }));
 const objEdgeMat = occlude(new THREE.LineBasicMaterial({ color: GOLD }));
 const SHARED = new Set([moveMat, rangeMat, edgeMat, objEdgeMat, ...Object.values(TERRAIN).map((t) => t.mat)]);
 const ringGeo = (r0, r1) => new THREE.RingGeometry(r0, r1, 48).rotateX(-Math.PI / 2);
-const boltGeo = new THREE.SphereGeometry(0.005, 8, 8);
-const boltMat = new THREE.MeshBasicMaterial({ color: YELLOW });
 
 // ---------- state ----------
 const units = [];
@@ -199,6 +198,7 @@ function selectUnit(u) {
   $('uName').value = u.name;
   $('uType').value = u.type;
   renderWeapons();
+  renderList();
   refresh();
 }
 // Weapon quick-switch in the main panel + editable list in the unit sheet.
@@ -357,20 +357,78 @@ function dot(p, group = notes, color = WHITE) {
   group.add(m);
 }
 
-function fire(a, b) {
-  const A = new THREE.Vector3(a.x, a.y + 0.02, a.z), B = new THREE.Vector3(b.x, b.y + 0.02, b.z);
-  const now = performance.now();
-  for (let i = 0; i < 3; i++) fx.push({ t0: now + i * 120, A, B, mesh: null });
+// Effects: each one is a mesh animated by step(mesh, t), t from 0 to 1 over dur ms, then removed.
+function spawn(mesh, delay, dur, step) { fx.push({ t0: performance.now() + delay, dur, mesh, step, on: false }); }
+const fxMat = (color) => new THREE.MeshBasicMaterial({ color, transparent: true, depthWrite: false });
+const ball = (r, color) => new THREE.Mesh(new THREE.SphereGeometry(r, 8, 6), fxMat(color));
+const fade = (m, t) => (m.material.opacity = 1 - t);
+function blast(P, delay, r, color) {
+  const m = ball(r, color);
+  m.position.copy(P);
+  spawn(m, delay, 350, (m, t) => (m.scale.setScalar(1 + t * 3), fade(m, t)));
+}
+function bullet(A, B, delay, dur, r, color, trail) {
+  spawn(ball(r, color), delay, dur, (m, t) => m.position.lerpVectors(A, B, t));
+  if (trail) for (let i = 0; i < 10; i++) {
+    const puff = ball(r * 1.2, 0x999999);
+    puff.position.lerpVectors(A, B, i / 10);
+    spawn(puff, delay + (dur * i) / 10, 600, (m, t) => (m.scale.setScalar(1 + t * 2), (m.material.opacity = 0.6 * (1 - t))));
+  }
+}
+// Shot from a to b; the look follows the weapon name, vehicles and monsters fire bigger.
+function fire(a, b, kind = 'bolt', big = false) {
+  const A = new THREE.Vector3(a.x, a.y + 0.02, a.z), B = new THREE.Vector3(b.x, b.y + 0.02, b.z), s = big ? 2 : 1;
+  if (kind === 'laser' || kind === 'melta') {
+    const color = kind === 'laser' ? 0xff2020 : 0xff8a00, len = A.distanceTo(B);
+    const beam = new THREE.Mesh(new THREE.CylinderGeometry(0.0015 * s, 0.0015 * s, len, 6), fxMat(color));
+    beam.position.lerpVectors(A, B, 0.5);
+    beam.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), B.clone().sub(A).normalize());
+    spawn(beam, 0, 450, (m, t) => { m.scale.x = m.scale.z = 1 + Math.sin(t * 60) * 0.5; fade(m, t); });
+    blast(B, 100, 0.006 * s, color);
+  } else if (kind === 'plasma') {
+    bullet(A, B, 0, 600, 0.007 * s, 0x40a0ff);
+    blast(B, 600, 0.012 * s, 0x9fd4ff);
+  } else if (kind === 'missile') {
+    bullet(A, B, 0, 700, 0.004 * s, 0xffffff, true);
+    blast(B, 700, 0.014 * s, ORANGE);
+  } else if (kind === 'flame') {
+    const side = new THREE.Vector3(B.z - A.z, 0, A.x - B.x).normalize();
+    for (let i = 0; i < 24; i++) {
+      const spread = (Math.random() - 0.5) * 0.4, f = ball(0.004 * s, i % 3 ? ORANGE : RED);
+      spawn(f, Math.random() * 350, 450, (m, t) => {
+        m.position.lerpVectors(A, B, t).addScaledVector(side, spread * t * A.distanceTo(B));
+        m.scale.setScalar(1 + t * 2);
+        fade(m, t);
+      });
+    }
+  } else {
+    for (let i = 0; i < 3; i++) {
+      bullet(A, B, i * 120, 250, 0.003 * s, YELLOW);
+      blast(B, i * 120 + 250, 0.004 * s, YELLOW);
+    }
+  }
+}
+// Destroyed model: fireball + debris thrown out.
+function explode(m, big) {
+  const P = new THREE.Vector3(m.x, m.y + 0.01, m.z), s = big ? 2 : 1;
+  blast(P, 0, 0.015 * s, ORANGE);
+  blast(P, 120, 0.01 * s, RED);
+  for (let i = 0; i < 8; i++) {
+    const a = (i / 8) * Math.PI * 2, v = 0.04 * s * (0.6 + Math.random() * 0.6);
+    spawn(ball(0.002 * s, 0x777777), 0, 700, (d, t) => {
+      d.position.set(P.x + Math.cos(a) * v * t, P.y + 0.06 * s * t - 0.08 * s * t * t, P.z + Math.sin(a) * v * t);
+      fade(d, t);
+    });
+  }
 }
 function animate() {
   const now = performance.now();
   for (let i = fx.length - 1; i >= 0; i--) {
-    const f = fx[i], t = (now - f.t0) / 250;
+    const f = fx[i], t = (now - f.t0) / f.dur;
     if (t < 0) continue;
-    if (!f.mesh) root.add((f.mesh = new THREE.Mesh(boltGeo, boltMat)));
-    if (t < 1) f.mesh.position.lerpVectors(f.A, f.B, t);
-    else if (t < 1.5) f.mesh.position.copy(f.B), f.mesh.scale.setScalar(1 + (t - 1) * 8); // impact flash
-    else root.remove(f.mesh), fx.splice(i, 1);
+    if (!f.on) root.add(f.mesh), (f.on = true);
+    if (t < 1) f.step(f.mesh, t);
+    else removeObj(f.mesh), fx.splice(i, 1);
   }
 }
 
@@ -384,8 +442,8 @@ function snapshot() {
   return {
     d: Math.hypot(refs.B.x - refs.A.x, refs.B.z - refs.A.z),
     turn, phase, started,
-    units: units.map(({ name, side, color, move, oc, ld, w, type, shocked, start, lastShot, weapons, weapon, roll, models }) =>
-      ({ name, side, color, move, oc, ld, w, type, shocked, start, lastShot, weapons, weapon, roll, models: models.map((m) => ({ ...f(m), r: m.r, wounds: m.wounds })) })),
+    units: units.map(({ name, side, color, move, oc, ld, w, type, shocked, start, lastShot, weapons, weapon, roll, list, size, models }) =>
+      ({ name, side, color, move, oc, ld, w, type, shocked, start, lastShot, weapons, weapon, roll, list, size, models: models.map((m) => ({ ...f(m), r: m.r, wounds: m.wounds })) })),
     terrains: terrains.map((t) => ({ poly: t.poly.map(f), type: t.type, h: t.h, objective: t.objective, owner: t.owner, secured: t.secured })),
     objectives: objectives.map((o) => ({ ...f(o), owner: o.owner, secured: o.secured })),
   };
@@ -478,7 +536,7 @@ const handlers = {
     if (m) return selectUnit(m.u), status(`${uname(m.u)} sélectionnée`);
     addModel(sel ?? newUnit(), p);
     refresh();
-    status(`${uname(sel)} : ${sel.models.length} figurine(s)`);
+    status(`${uname(sel)} : ${sel.models.length}${sel.size ? "/" + sel.size : ""} figurine(s)`);
   },
   measure(p) {
     const pt = target(p);
@@ -524,7 +582,7 @@ const handlers = {
     disposeTree(notes);
     line(a, b, inR && vis ? YELLOW : RED, fmt(d) + (!los ? ' pas de LdV' : !vis ? ' cachée' : cover ? ' couvert' : ''));
     if (inR && vis) {
-      fire(a, b);
+      fire(a, b, fxKind(weaponOf(a.u).name), a.u.type !== 'inf');
       a.u.lastShot = turn; // the shooting unit can no longer be hidden this turn and next
       refresh();
     }
@@ -541,6 +599,7 @@ const handlers = {
     m.wounds -= dmg;
     if (m.wounds > 0) return refresh(), status(`${uname(m.u)} : figurine à ${m.wounds}/${m.u.w} PV`);
     removeModel(m);
+    explode(m, m.u.type !== 'inf');
     refresh();
     status(`${uname(m.u)} : figurine détruite (${m.u.models.length}/${m.u.start})${half(m.u) ? ' – demi-effectif, test de moral au prochain Commandement' : ''}`);
   },
@@ -728,6 +787,59 @@ $('fold').onclick = () => {
 };
 if (store.get('folded')) $('fold').click();
 
+// ---------- army lists ----------
+// One imported list per side (localStorage). Picking a list entry links the selected unit to it (if not linked yet,
+// so models already placed keep their place) or creates a new linked unit; its profile and weapons are copied.
+const armies = JSON.parse(store.get('armies') || '{}');
+const PDFJS = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/';
+async function pdfText(file) {
+  const pdfjs = await import(PDFJS + 'pdf.min.mjs');
+  pdfjs.GlobalWorkerOptions.workerSrc = PDFJS + 'pdf.worker.min.mjs';
+  const doc = await pdfjs.getDocument({ data: await file.arrayBuffer() }).promise;
+  const pages = [];
+  for (let i = 1; i <= doc.numPages; i++) pages.push(linesFromItems((await (await doc.getPage(i)).getTextContent()).items));
+  return pages.join('\n');
+}
+function renderList() {
+  const list = armies[$('side').value] ?? [], pick = $('listUnit');
+  pick.hidden = !list.length;
+  const used = new Set(units.filter((u) => u.side === Number($('side').value)).map((u) => u.list));
+  pick.replaceChildren(new Option(sel && sel.list == null ? 'Lier à la liste…' : '+ Unité de la liste…', ''),
+    ...list.map((lu, i) => new Option(`${used.has(i) ? '✓ ' : ''}${lu.name} (${lu.models || '?'} fig.)`, i)));
+  $('armySummary').textContent = list.length
+    ? `J${$('side').value} : ${list.length} unités, ${list.reduce((n, lu) => n + lu.pts, 0)} pts` : 'Aucune liste pour ce camp.';
+}
+$('listUnit').onchange = () => {
+  const i = Number($('listUnit').value), lu = armies[$('side').value]?.[i];
+  if (!lu || $('listUnit').value === '') return;
+  const u = sel && sel.list == null && sel.side === Number($('side').value) ? sel : newUnit();
+  Object.assign(u, { name: lu.name, move: lu.move, oc: lu.oc, ld: lu.ld, w: lu.w, type: lu.type, list: i, size: lu.models,
+    weapons: lu.weapons.map((wp) => ({ ...wp })), weapon: 0 });
+  for (const m of u.models) m.wounds = Math.min(m.wounds, u.w) || u.w;
+  selectUnit(u);
+  renderList();
+  status(`${uname(u)} liée à la liste : ${u.models.length}/${lu.models || '?'} figurine(s) posée(s)`);
+};
+$('armyOpen').onclick = () => { $('army').hidden = !$('army').hidden; renderList(); };
+$('armyClose').onclick = () => ($('army').hidden = true);
+$('armyImport').onclick = async () => {
+  const file = $('armyFile').files[0];
+  try {
+    status('Lecture de la liste…');
+    const text = file ? (/pdf$/i.test(file.type || file.name) ? await pdfText(file) : await file.text()) : $('armyText').value;
+    const list = parseArmyList(text);
+    if (!list.length) return status('Aucune unité reconnue (format attendu : export BattleBase, "NOM 150 PTS" puis les profils)');
+    armies[$('side').value] = list;
+    store.set('armies', JSON.stringify(armies));
+    renderList();
+    status(`Liste J${$('side').value} importée : ${list.length} unités. Choisis-les dans le menu à côté de l'arme.`);
+  } catch (err) {
+    status(`Import impossible : ${err.message}`);
+  }
+};
+$('side').addEventListener('change', renderList);
+renderList();
+
 // on-device test checklist
 const CHECKS = [
   'Calibrer : règle de 6" mesurée à 6" (±0,1") avec Mesurer',
@@ -852,7 +964,7 @@ if (location.hash === '#debug') {
   window.dbg = {
     handlers, units, terrains, objectives, store, occ,
     tap: (m, x, z) => { mode = m; tap({ x, y: 0, z }); },
-    undoStack, preview,
+    undoStack, preview, fire, explode, fx, animate, // effects: call animate() to step them when rAF is throttled
     setMode: (m) => document.querySelector(`[data-mode=${m}]`).click(),
     compile: () => renderer.compile(scene, camera), // forces every shader (incl. occlusion patch) to build
     renderer, scene, THREE,
