@@ -4,7 +4,7 @@ import {
   inArea, inPoly, modelCover, unitCover, control, toFrame, fromFrame, d6,
   hidden, canSee, halfStrength, leadershipPass, endPhaseOwner, PHASES,
 } from './rules.js';
-import { parseArmyList, linesFromItems, fxKind } from './armylist.js';
+import { parseArmyList, linesFromItems, fxKind, has } from './armylist.js';
 
 const $ = (id) => document.getElementById(id);
 const COLORS = [0x3fa9f5, 0xf5a623, 0xbd10e0, 0x50e3c2, 0xf8e71c, 0xff6f91, 0x9b9b9b, 0x7ed321];
@@ -139,7 +139,20 @@ const shotRecently = (u) => u.lastShot >= turn - 1; // ranged attacks this turn 
 const isHidden = (m) => hidden(m, terrains, infantry(m.u), shotRecently(m.u));
 const weaponOf = (u) => u.weapons[u.weapon] ?? { name: '–', range: 0 };
 const rangeOf = (u) => weaponOf(u).range;
-const half = (u) => halfStrength(u.start, u.models.length, u.models[0]?.wounds, u.w);
+// Per-model profile (army list): m.p indexes m.u.profiles (sergeant, troopers, attached leader...).
+const profOf = (m) => m.u.profiles?.[m.p];
+const wMax = (m) => profOf(m)?.w ?? m.u.w;
+// does this model carry the unit's selected weapon? (no profile: every model does)
+const armed = (m) => !profOf(m) || profOf(m).weapons.includes(weaponOf(m.u).name);
+const shooters = (u) => u.models.filter(armed);
+const loneOp = (u) => has(u.abilities, 'Lone Operative');
+// next profile still short of its count, else the last one (extra troopers)
+function autoProfile(u) {
+  if (!u.profiles?.length) return undefined;
+  const i = u.profiles.findIndex((pr, j) => u.models.filter((m) => m.p === j).length < pr.count);
+  return i < 0 ? u.profiles.length - 1 : i;
+}
+const half = (u) => halfStrength(u.start, u.models.length, u.models[0]?.wounds, u.models[0] ? wMax(u.models[0]) : u.w);
 
 function disposeTree(o) {
   o.traverse((c) => { c.geometry?.dispose(); if (c.material && !SHARED.has(c.material)) { c.material.map?.dispose(); c.material.dispose(); } });
@@ -203,7 +216,18 @@ function selectUnit(u) {
   refresh();
 }
 // Weapon quick-switch in the main panel + editable list in the unit sheet.
+// Read-only datasheet in the unit sheet, from the army list.
+function renderProfile() {
+  const u = sel, sv = (p) => `Sv${p.sv}+${p.inv ? ` (${p.inv}++)` : ''}`;
+  const wl = (w, melee) => `${w.name} ${melee ? 'mêlée' : w.range + '"'} A${w.a} ${melee ? 'CC' : 'CT'}${w.skill ? w.skill + '+' : ' auto'} F${w.s} PA${w.ap} D${w.d}${w.abilities?.length ? ` [${w.abilities.join(', ')}]` : ''}`;
+  $('profileInfo').textContent = !u?.profiles?.length ? '' : [
+    ...u.profiles.map((p) => `${p.name} ×${p.count} : M${p.move}" E${p.t} ${sv(p)} PV${p.w} Cd${p.ld}+ OC${p.oc}`),
+    ...u.weapons.map((w) => wl(w, false)), ...(u.melee ?? []).map((w) => wl(w, true)),
+    [u.abilities?.join(', '), u.damaged && `Endommagé à ${u.damaged} PV ou moins : -1 touche`, u.demise && `Deadly Demise ${u.demise}`].filter(Boolean).join(' · '),
+  ].join('\n');
+}
 function renderWeapons() {
+  renderProfile();
   const sw = $('weapon');
   sw.replaceChildren(...(sel?.weapons ?? []).map((wp, i) => new Option(`${wp.name} ${wp.range}"`, i, false, i === sel.weapon)));
   const list = $('weapons');
@@ -227,14 +251,15 @@ function renderWeapons() {
     list.append(row);
   });
 }
-function addModel(u, p, r = Number($('base').value) / 2000, wounds = u.w) {
+function addModel(u, p, r = Number($('base').value) / 2000, wounds, prof = autoProfile(u)) {
+  wounds ??= u.profiles?.[prof]?.w ?? u.w;
   const mesh = new THREE.Mesh(ringGeo(r - 0.002, r), basic(u.color));
   const halo = new THREE.Mesh(ringGeo(r + 0.003, r + 0.006), basic(WHITE));
   halo.visible = false;
   mesh.add(halo);
   mesh.position.set(p.x, p.y + 0.001, p.z);
   u.group.add(mesh);
-  u.models.push({ x: p.x, y: p.y, z: p.z, r, wounds, mesh, halo, tag: null, tagKey: '', u });
+  u.models.push({ x: p.x, y: p.y, z: p.z, r, wounds, p: prof, mesh, halo, tag: null, tagKey: '', u });
   u.start = Math.max(u.start, u.models.length); // starting strength
 }
 
@@ -293,9 +318,10 @@ function refresh() {
       m.mesh.material.opacity = hid ? 0.4 : 1;
       // Rightful-Ruler style halo on enemy models: shootable (range + visible), or reachable by the charge roll.
       const enemy = !!sel && u.side !== sel.side;
-      m.halo.visible = enemy && (sel.roll?.kind === 'charge' ? chargeReach(sel.models, m, sel.roll.n) : inRange(sel.models, m, rangeOf(sel), terrains, hid));
-      // remaining wounds above damaged multi-wound models
-      const key = m.wounds < u.w ? `${m.wounds}/${u.w} PV` : '';
+      m.halo.visible = enemy && (sel.roll?.kind === 'charge' ? chargeReach(sel.models, m, sel.roll.n) : canTarget(sel, m, hid));
+      // remaining wounds above damaged multi-wound models; Damaged x: -1 to hit at x wounds or fewer
+      const dmgd = u.damaged && m.wounds <= u.damaged;
+      const key = m.wounds < wMax(m) || dmgd ? `${m.wounds}/${wMax(m)} PV${dmgd ? ' -1 CT' : ''}` : '';
       if (key !== m.tagKey) {
         if (m.tag) removeObj(m.tag);
         m.tag = key ? label(key, new THREE.Vector3(0, 0.03, 0), '#ff9500') : null;
@@ -308,12 +334,21 @@ function refresh() {
   if (sel) {
     rangeMat.color.setHex(sel.color);
     const mv = allowedMove(sel);
+    const wp = weaponOf(sel), halfRange = has(wp.abilities, 'RAPID FIRE') || has(wp.abilities, 'MELTA');
     for (const m of sel.models) {
-      for (const [R, mat, order] of [[m.r + mv * INCH, moveMat, 1], [m.r + rangeOf(sel) * INCH, rangeMat, 2]]) {
+      const discs = [[m.r + mv * INCH, moveMat, 1]];
+      if (armed(m)) discs.push([m.r + rangeOf(sel) * INCH, rangeMat, 2]);
+      for (const [R, mat, order] of discs) {
         const d = new THREE.Mesh(new THREE.CircleGeometry(R, 64).rotateX(-Math.PI / 2), mat);
         d.position.set(m.x, m.y + 0.0005, m.z);
         d.renderOrder = order;
         sel.aura.add(d);
+      }
+      // Rapid Fire / Melta bonus range: a ring at half range
+      if (halfRange && armed(m)) {
+        const R = m.r + (rangeOf(sel) / 2) * INCH, ring = new THREE.Mesh(ringGeo(R - 0.0015, R), new THREE.MeshBasicMaterial({ color: sel.color }));
+        ring.position.set(m.x, m.y + 0.0008, m.z);
+        sel.aura.add(ring);
       }
     }
     const nBad = incoherent(sel.models).length;
@@ -443,8 +478,11 @@ function snapshot() {
   return {
     d: Math.hypot(refs.B.x - refs.A.x, refs.B.z - refs.A.z),
     turn, phase, started,
-    units: units.map(({ name, side, color, move, oc, ld, w, type, shocked, start, lastShot, weapons, weapon, roll, list, size, models }) =>
-      ({ name, side, color, move, oc, ld, w, type, shocked, start, lastShot, weapons, weapon, roll, list, size, models: models.map((m) => ({ ...f(m), r: m.r, wounds: m.wounds })) })),
+    units: units.map(({ name, side, color, move, oc, ld, w, type, shocked, start, lastShot, weapons, weapon, roll, list, size, models,
+      profiles, melee, abilities, keywords, damaged, demise, attached }) =>
+      ({ name, side, color, move, oc, ld, w, type, shocked, start, lastShot, weapons, weapon, roll, list, size,
+        profiles, melee, abilities, keywords, damaged, demise, attached,
+        models: models.map((m) => ({ ...f(m), r: m.r, wounds: m.wounds, p: m.p })) })),
     terrains: terrains.map((t) => ({ poly: t.poly.map(f), type: t.type, h: t.h, objective: t.objective, owner: t.owner, secured: t.secured })),
     objectives: objectives.map((o) => ({ ...f(o), owner: o.owner, secured: o.secured })),
   };
@@ -469,7 +507,7 @@ function restore(s, keepView = false) {
   for (const su of s.units) {
     const { models, ...props } = su;
     const u = makeUnit(props);
-    for (const m of models) addModel(u, g(m), m.r, m.wounds ?? u.w);
+    for (const m of models) addModel(u, g(m), m.r, m.wounds, m.p ?? undefined);
   }
   for (const t of s.terrains) addTerrain(t.poly.map(g), refs.A.y, TERRAIN[t.type] ? t.type : 'dense', Number(t.h) || 0, t.objective, t.owner, t.secured);
   for (const o of s.objectives) addObjective(g(o), o.owner, o.secured);
@@ -530,14 +568,43 @@ function drawRefs() {
   }
 }
 
+// Can sel's armed models shoot this enemy model with the selected weapon? (range, sight, Hidden, Lone Operative, Indirect Fire)
+function canTarget(u, m, hid) {
+  const indirect = has(weaponOf(u).abilities, 'INDIRECT FIRE'), arm = shooters(u);
+  if (!inRange(arm, m, rangeOf(u), indirect ? [] : terrains, !indirect && hid)) return false;
+  return !loneOp(m.u) || arm.some((a) => toIn(edgeDist(a, m)) <= 12 + 1e-6);
+}
+// Deadly Demise x: when the model is destroyed, roll D6; on a 6 each unit within 6" suffers x mortal wounds.
+function deadlyDemise(m) {
+  if (!m.u.demise) return '';
+  const roll = d6();
+  if (roll < 6) return ` – Deadly Demise : ${roll}, rien`;
+  const ring = new THREE.Mesh(ringGeo(m.r + 6 * INCH - 0.003, m.r + 6 * INCH), new THREE.MeshBasicMaterial({ color: RED }));
+  ring.position.set(m.x, m.y + 0.001, m.z);
+  notes.add(ring);
+  const hit = units.filter((u) => u.models.some((o) => toIn(edgeDist(m, o)) <= 6 + 1e-6)).map(uname);
+  return ` – DEADLY DEMISE 6 ! ${m.u.demise} BM à : ${hit.join(', ') || 'personne'}`;
+}
+
 // ---------- tap handlers (p = reticle hit in table-local real metres) ----------
 const handlers = {
   place(p) {
     const m = pick(p);
-    if (m) return selectUnit(m.u), status(`${uname(m.u)} sélectionnée`);
+    if (m && m.u === sel && sel.profiles?.length > 1) {
+      // per-model profile: tap again to cycle (sergeant, trooper, attached leader...)
+      m.p = ((m.p ?? -1) + 1) % sel.profiles.length;
+      m.wounds = wMax(m);
+      refresh();
+      return status(`Figurine : ${profOf(m).name} (${profOf(m).weapons.join(', ') || 'pas d’arme de tir'})`);
+    }
+    if (m) return selectUnit(m.u), status(`${uname(m.u)} sélectionnée${m.u.profiles?.length > 1 ? ' (re-touche une figurine pour changer son profil)' : ''}`);
     addModel(sel ?? newUnit(), p);
     refresh();
-    status(`${uname(sel)} : ${sel.models.length}${sel.size ? "/" + sel.size : ""} figurine(s)`);
+    const placed = sel.models.at(-1);
+    // Deep Strike reminder once the battle has started: set up more than 9" from enemy models
+    const foe = started && has(sel.abilities, 'Deep Strike') ? Math.min(...enemiesOf(sel.side).map((e) => toIn(edgeDist(placed, e)))) : Infinity;
+    status(`${uname(sel)} : ${sel.models.length}${sel.size ? '/' + sel.size : ''} figurine(s)${profOf(placed) ? ` – ${profOf(placed).name}` : ''}`
+      + (foe < 9 ? ` – Frappe en profondeur : ${foe.toFixed(1)}" d'un ennemi (9" min)` : ''));
   },
   measure(p) {
     const pt = target(p);
@@ -570,13 +637,15 @@ const handlers = {
     if (!pending) {
       const m = pick(p);
       if (!m) return status('Touche un tireur');
-      pending = m;
       selectUnit(m.u);
+      if (!armed(m)) return status(`${profOf(m).name} n'a pas ${weaponOf(m.u).name} : choisis une autre arme ou une autre figurine`);
+      pending = m;
       return status(`Touche la cible (${weaponOf(m.u).name} ${rangeOf(m.u)}")`);
     }
-    const a = pending, b = target(p), d = edgeDist(a, b);
-    const hid = !!b.u && isHidden(b);
-    const los = canSee(a, b, terrains), vis = canSee(a, b, terrains, hid);
+    const a = pending, b = target(p), d = edgeDist(a, b), wp = weaponOf(a.u);
+    const hid = !!b.u && isHidden(b), indirect = has(wp.abilities, 'INDIRECT FIRE');
+    const lone = !!b.u && loneOp(b.u) && toIn(d) > 12 + 1e-6; // Lone Operative: only targetable within 12"
+    const los = indirect || canSee(a, b, terrains), vis = !lone && (indirect || canSee(a, b, terrains, hid));
     const inR = toIn(d) <= rangeOf(a.u) + 1e-6;
     const cover = vis && (b.u ? unitCover(a, b.u.models, terrains, infantry(b.u)) : modelCover(a, b, terrains));
     pending = null;
@@ -587,10 +656,19 @@ const handlers = {
       a.u.lastShot = turn; // the shooting unit can no longer be hidden this turn and next
       refresh();
     }
-    status(!los ? `Pas de ligne de vue (${fmt(d)})`
+    const extra = [
+      cover && ' – unité à couvert : CT -1',
+      indirect && !canSee(a, b, terrains) && ' – tir indirect sans visibilité : -1 touche, cible à couvert',
+      has(wp.abilities, 'TORRENT') && ' – Torrent : touche auto',
+      has(wp.abilities, 'RAPID FIRE') && toIn(d) <= rangeOf(a.u) / 2 + 1e-6 && ` – Tir rapide : +${wp.abilities.find((x) => /^RAPID FIRE/i.test(x)).split(' ').pop()} A`,
+      has(wp.abilities, 'MELTA') && toIn(d) <= rangeOf(a.u) / 2 + 1e-6 && ` – Melta : +${wp.abilities.find((x) => /^MELTA/i.test(x)).split(' ').pop()} D`,
+      a.u.damaged && a.wounds <= a.u.damaged && ' – tireur endommagé : -1 touche',
+    ].filter(Boolean).join('');
+    status(lone ? `Lone Operative : ciblable à 12" max (${fmt(d)})`
+      : !los ? `Pas de ligne de vue (${fmt(d)})`
       : !vis ? `Cible cachée : hors de sa portée de détection (${fmt(d)})`
-      : !inR ? `Hors de portée : ${fmt(d)} > ${weaponOf(a.u).name} ${rangeOf(a.u)}"`
-      : `Tir à ${fmt(d)}${cover ? ' – unité à couvert : CT -1' : ''}`);
+      : !inR ? `Hors de portée : ${fmt(d)} > ${wp.name} ${rangeOf(a.u)}"`
+      : `Tir à ${fmt(d)}${extra}`);
   },
   // Lasso (table-local path): the models inside it move to a new unit, ready to link to an army-list entry.
   // If both sides are inside, the side with more models in the lasso is taken.
@@ -622,11 +700,11 @@ const handlers = {
     if (!m) return status('Touche une figurine');
     const dmg = Math.max(1, Number($('dmg').value) || 1);
     m.wounds -= dmg;
-    if (m.wounds > 0) return refresh(), status(`${uname(m.u)} : figurine à ${m.wounds}/${m.u.w} PV`);
+    if (m.wounds > 0) return refresh(), status(`${uname(m.u)} : figurine à ${m.wounds}/${wMax(m)} PV${m.u.damaged && m.wounds <= m.u.damaged ? ' – endommagée : -1 touche' : ''}`);
     removeModel(m);
     explode(m, m.u.type !== 'inf');
     refresh();
-    status(`${uname(m.u)} : figurine détruite (${m.u.models.length}/${m.u.start})${half(m.u) ? ' – demi-effectif, test de moral au prochain Commandement' : ''}`);
+    status(`${uname(m.u)} : figurine détruite (${m.u.models.length}/${m.u.start})${half(m.u) ? ' – demi-effectif, test de moral au prochain Commandement' : ''}${deadlyDemise(m)}`);
   },
   terrain(p) {
     if (!pending) disposeTree(notes);
@@ -840,7 +918,7 @@ async function pdfText(file) {
 function renderList() {
   const list = armies[$('side').value] ?? [], pick = $('listUnit');
   pick.hidden = !list.length;
-  const used = new Set(units.filter((u) => u.side === Number($('side').value)).map((u) => u.list));
+  const used = new Set(units.filter((u) => u.side === Number($('side').value)).flatMap((u) => [u.list, ...(u.attached ?? [])]));
   pick.replaceChildren(new Option(sel && sel.list == null ? 'Lier à la liste…' : '+ Unité de la liste…', ''),
     ...list.map((lu, i) => new Option(`${used.has(i) ? '✓ ' : ''}${lu.name} (${lu.models || '?'} fig.)`, i)));
   $('armySummary').textContent = list.length
@@ -849,14 +927,46 @@ function renderList() {
 $('listUnit').onchange = () => {
   const i = Number($('listUnit').value), lu = armies[$('side').value]?.[i];
   if (!lu || $('listUnit').value === '') return;
-  const u = sel && sel.list == null && sel.side === Number($('side').value) ? sel : newUnit();
+  const side = Number($('side').value), list = armies[side];
+  const u = sel && sel.list == null && sel.side === side ? sel : newUnit();
+  const copy = (x) => JSON.parse(JSON.stringify(x ?? []));
   Object.assign(u, { name: lu.name, move: lu.move, oc: lu.oc, ld: lu.ld, w: lu.w, type: lu.type, list: i, size: lu.models,
-    weapons: lu.weapons.map((wp) => ({ ...wp })), weapon: 0 });
-  for (const m of u.models) m.wounds = Math.min(m.wounds, u.w) || u.w;
-  selectUnit(u);
+    weapons: copy(lu.weapons), weapon: 0, melee: copy(lu.melee), profiles: copy(lu.profiles), abilities: copy(lu.abilities),
+    keywords: copy(lu.keywords), damaged: lu.damaged ?? 0, demise: lu.demise ?? '', attached: [] });
+  // models already on the table get the profiles in list order (sergeant first), at full wounds
+  for (const m of u.models) m.p = undefined;
+  for (const m of u.models) (m.p = autoProfile(u)), (m.wounds = wMax(m));
+  // attached character (Leading / Supporting): merged with its bodyguard unit once both are on the table
+  const other = units.find((o) => o !== u && o.side === side && o.list != null && list[o.list]
+    && (list[o.list].attach === lu.name || lu.attach === list[o.list].name));
+  const res = other ? attach(lu.attach ? other : u, lu.attach ? u : other) : u;
+  selectUnit(res);
   renderList();
-  status(`${uname(u)} liée à la liste : ${u.models.length}/${lu.models || '?'} figurine(s) posée(s)`);
+  status(other ? `${uname(res)} : personnage attaché, ${res.models.length}/${res.size} figurine(s)`
+    : `${uname(u)} liée à la liste : ${u.models.length}/${lu.models || '?'} figurine(s) posée(s)`);
 };
+// Merge a character unit into its bodyguard: one unit on the table, each model keeps its own profile.
+function attach(body, chr) {
+  const n = body.profiles.length;
+  for (const m of [...chr.models]) {
+    chr.models.splice(chr.models.indexOf(m), 1);
+    body.group.add(m.mesh);
+    m.u = body;
+    m.p = m.p == null ? undefined : m.p + n;
+    body.models.push(m);
+  }
+  const union = (a, b) => [...a, ...b.filter((x) => !a.some((y) => (y.name ?? y) === (x.name ?? x)))];
+  Object.assign(body, {
+    name: `${body.name} + ${chr.name}`, size: (body.size || 0) + (chr.size || 0), start: body.start + chr.start,
+    profiles: [...body.profiles, ...chr.profiles], weapons: union(body.weapons, chr.weapons), melee: union(body.melee, chr.melee),
+    abilities: union(body.abilities, chr.abilities.filter((a) => !/^(Leader|Support|Lone Operative)$/.test(a))),
+    keywords: union(body.keywords, chr.keywords), attached: [...(body.attached ?? []), chr.list],
+    move: Math.min(body.move, chr.move),
+  });
+  units.splice(units.indexOf(chr), 1);
+  removeObj(chr.group);
+  return body;
+}
 $('armyOpen').onclick = () => { $('army').hidden = !$('army').hidden; renderList(); };
 $('armyClose').onclick = () => ($('army').hidden = true);
 $('armyImport').onclick = async () => {

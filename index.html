@@ -37,6 +37,8 @@
   #army[hidden] { display: none; }
   #army input[type=file] { width: 100%; }
   #army textarea { width: 100%; box-sizing: border-box; font: inherit; color: var(--fg); background: var(--btn); border: 1px solid #555; border-radius: 8px; }
+  #profileInfo { white-space: pre-line; font-size: 12px; max-height: 30vh; overflow-y: auto; }
+  #profileInfo:empty { display: none; }
   #sheet { display: grid; gap: 4px; padding: 6px; background: rgba(0,0,0,.8); border-radius: 10px; }
 </style>
 </head>
@@ -88,6 +90,7 @@
         <label>Ld <input id="ld" type="number" value="7" min="2" max="12" step="1">+</label>
         <label>PV <input id="w" type="number" value="1" min="1" step="1"></label>
       </div>
+      <div id="profileInfo"></div>
       <div id="weapons"></div>
       <div class="row">
         <button id="addWeapon">+ Arme</button>
