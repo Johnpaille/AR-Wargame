@@ -35,6 +35,8 @@
   #checklist textarea { width: 100%; box-sizing: border-box; font: inherit; color: var(--fg); background: var(--btn); border: 1px solid #555; border-radius: 8px; }
   #army { max-height: 45vh; overflow-y: auto; padding: 6px; background: rgba(0,0,0,.85); border-radius: 10px; display: grid; gap: 6px; }
   #army[hidden] { display: none; }
+  #losAsk { display: flex; gap: 4px; flex-wrap: wrap; justify-content: center; align-items: center; padding: 6px; background: rgba(0,0,0,.85); border: 1px solid #ff9500; border-radius: 10px; }
+  #losAsk[hidden] { display: none; }
   #army input[type=file] { width: 100%; }
   #army textarea { width: 100%; box-sizing: border-box; font: inherit; color: var(--fg); background: var(--btn); border: 1px solid #555; border-radius: 8px; }
   #profileInfo { white-space: pre-line; font-size: 12px; max-height: 30vh; overflow-y: auto; }
@@ -64,6 +66,13 @@
         <button id="checkReset">Tout décocher</button>
         <button id="checkClose">Fermer</button>
       </div>
+    </div>
+    <!-- Tirer: one of the models is within an obscuring area, the player checks the real line of sight -->
+    <div id="losAsk" hidden>
+      <span>La cible dépasse ?</span>
+      <button data-los="full">Entièrement visible</button>
+      <button data-los="partial">En partie (couvert)</button>
+      <button data-los="none">Cachée</button>
     </div>
     <!-- army list import (BattleBase PDF or pasted text), one list per player -->
     <div id="army" hidden>

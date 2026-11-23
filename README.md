@@ -43,6 +43,7 @@ Recommended order: **Calibrer**, **Repères**, then place terrain, objectives an
 - Model ring colours: red = out of coherency, orange = engaged (within 2" of an enemy).
 - **Mesurer**: 2 taps, base-to-base distance.
 - **Déplacer**: tap the model, then its new spot. Red if over the allowance.
+- **Real line of sight**: when the shooter or the target is within a light/dense area (any model, vehicles included), 13.10 excludes that area and the real line of sight decides (does the model stick out on the sides or over the top?). The app can't see the walls, so it draws the shot in orange and asks: **Entièrement visible** (no cover, except INFANTRY/BEASTS/SWARM within an area), **En partie (couvert)** (BS -1), **Cachée** (no shot). Enemy halos are orange when every shooter in range is in this case. Two units separated by an area that neither one is within cannot see each other when every sight line crosses it (decided by the app, no question).
 - **Tirer**: shooter, then target. Checks range and visibility; tells when the target unit has the benefit of cover (BS -1).
 - **Avance D6** (M + D6) / **Charge 2D6**: change the move aura. After a charge roll, the halo shows enemies within 12" that the roll can reach (roll + 2" engagement).
 - **Décor**: 2 corners of one side, then the opposite side. Type: dense / light (obscuring) or exposed. **Retirer décor** removes the last one.

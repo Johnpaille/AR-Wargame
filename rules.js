@@ -104,6 +104,12 @@ const samples = (m) => (m.r ? [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1]] : [[0, 
 
 // 13.10 Obscuring: not visible if every line of sight crosses an obscuring area that neither model is within.
 // Lines are sampled between 5 points per base, an approximation of "any part of the model".
+// 13.10 excludes the obscuring areas either model is within. Through those, visibility is true line of sight (06.01:
+// any part to any part, over or around the real feature, Solid gaps under 3" blocked), which a footprint can't tell.
+// Returns those areas: empty means the footprints alone decide.
+export const trueLosAreas = (a, b, terrains) => terrains.filter((t) => obscuring(t) && (inArea(a, t.poly) || inArea(b, t.poly)));
+
+// 13.10: not visible if every sight line crosses an obscuring area neither model is within.
 export function lineOfSight(a, b, terrains) {
   const walls = terrains.filter((t) => obscuring(t) && !inArea(a, t.poly) && !inArea(b, t.poly));
   if (!walls.length) return true;

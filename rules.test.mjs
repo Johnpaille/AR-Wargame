@@ -4,7 +4,7 @@ import {
   INCH, edgeDist, incoherent, engaged, inRange, chargeReach, newScale, toIn, rectFromTaps, segHit, inPoly, inArea,
   lineOfSight, modelCover, unitCover, control, toFrame, fromFrame, d6,
 } from './rules.js';
-import { vOk, elevIn, moveDist, plunging, inObjRange } from './rules.js';
+import { vOk, elevIn, moveDist, plunging, inObjRange, trueLosAreas } from './rules.js';
 
 const r = 0.016; // 32mm base
 const gap = (inches) => inches * INCH + 2 * r; // centre distance giving an edge gap of `inches`
@@ -144,6 +144,12 @@ assert.equal(d6(() => 0), 1);
 assert.equal(d6(() => 0.9999), 6);
 const k = newScale(0.15, 1, 6);
 assert.ok(close(0.15 / k, 6 * INCH));
+
+// ---------- true line of sight (13.10 exclusion) ----------
+assert.equal(trueLosAreas(shooter, tgt, [dense]).length, 0, 'footprint between, neither model in it: the app decides (blocked)');
+assert.equal(trueLosAreas(shooter, M(0.05), [dense]).length, 1, 'target within the area: real line of sight decides');
+assert.equal(trueLosAreas(M(-0.05), tgt, [dense]).length, 1, 'shooter within the area');
+assert.equal(trueLosAreas(shooter, M(0.05), [exposed]).length, 0, 'exposed areas never obscure');
 
 // ---------- heights ----------
 const H = (x, yIn, z = 0) => ({ x, z, r, y: yIn * INCH });

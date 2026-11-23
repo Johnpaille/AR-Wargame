@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import {
   INCH, BASES_MM, RULES, edgeDist, incoherent, engaged, inRange, chargeReach, newScale, toIn, rectFromTaps,
   inArea, inPoly, modelCover, unitCover, control, toFrame, fromFrame, d6,
-  hidden, canSee, halfStrength, leadershipPass, endPhaseOwner, PHASES, elevIn, moveDist, plunging,
+  hidden, canSee, halfStrength, leadershipPass, endPhaseOwner, PHASES, elevIn, moveDist, plunging, trueLosAreas,
 } from './rules.js';
 import { parseArmyList, linesFromItems, fxKind, has } from './armylist.js';
 
@@ -321,7 +321,9 @@ function refresh() {
       m.mesh.material.opacity = hid ? 0.4 : 1;
       // Rightful-Ruler style halo on enemy models: shootable (range + visible), or reachable by the charge roll.
       const enemy = !!sel && u.side !== sel.side;
-      m.halo.visible = enemy && (sel.roll?.kind === 'charge' ? chargeReach(sel.models, m, sel.roll.n) : canTarget(sel, m, hid));
+      const tgt = enemy && (sel.roll?.kind === 'charge' ? chargeReach(sel.models, m, sel.roll.n) : canTarget(sel, m, hid));
+      m.halo.visible = !!tgt;
+      m.halo.material.color.setHex(tgt === 'check' ? ORANGE : WHITE); // orange: real line of sight to check
       // remaining wounds above damaged multi-wound models; Damaged x: -1 to hit at x wounds or fewer
       const dmgd = u.damaged && m.wounds <= u.damaged;
       const up = elevIn(m, groundY()), upTxt = up >= 1 ? ` ↑${up.toFixed(1)}"` : '';
@@ -578,10 +580,13 @@ function drawRefs() {
 }
 
 // Can sel's armed models shoot this enemy model with the selected weapon? (range, sight, Hidden, Lone Operative, Indirect Fire)
+// Returns false, true, or 'check' when every shooter that could fire needs the real line of sight (a model in an area).
 function canTarget(u, m, hid) {
-  const indirect = has(weaponOf(u).abilities, 'INDIRECT FIRE'), arm = shooters(u);
-  if (!inRange(arm, m, rangeOf(u), indirect ? [] : terrains, !indirect && hid)) return false;
-  return !loneOp(m.u) || arm.some((a) => toIn(edgeDist(a, m)) <= 12 + 1e-6);
+  const indirect = has(weaponOf(u).abilities, 'INDIRECT FIRE');
+  const ok = shooters(u).filter((a) => inRange([a], m, rangeOf(u), indirect ? [] : terrains, !indirect && hid)
+    && (!loneOp(m.u) || toIn(edgeDist(a, m)) <= 12 + 1e-6));
+  if (!ok.length) return false;
+  return !indirect && ok.every((a) => trueLosAreas(a, m, terrains).length) ? 'check' : true;
 }
 // Deadly Demise x: when the model is destroyed, roll D6; on a 6 each unit within 6" suffers x mortal wounds.
 function deadlyDemise(m) {
@@ -594,6 +599,51 @@ function deadlyDemise(m) {
   const hit = units.filter((u) => u.models.some((o) => toIn(edgeDist(m, o)) <= 6 + 1e-6)).map(uname);
   return ` – DEADLY DEMISE 6 ! ${m.u.demise} BM à : ${hit.join(', ') || 'personne'}`;
 }
+
+// Shot result. answer (the player's look at the real models, see losAsk): 'full' | 'partial' | 'none' | null (footprints decide).
+function resolveShot(a, b, los, vis, answer) {
+  const d = edgeDist(a, b), wp = weaponOf(a.u), indirect = has(wp.abilities, 'INDIRECT FIRE');
+  const lone = !!b.u && loneOp(b.u) && toIn(d) > 12 + 1e-6, inR = toIn(d) <= rangeOf(a.u) + 1e-6;
+  if (answer === 'none') vis = false;
+  // 13.08: INFANTRY/BEASTS/SWARM within a terrain area, or not fully visible (here: the player's answer)
+  const inAreaCover = (m) => infantry(m.u ?? {}) && terrains.some((t) => inArea(m, t.poly));
+  const cover = vis && (answer === 'partial' ? true
+    : answer === 'full' ? (b.u ? b.u.models.every(inAreaCover) : false)
+    : b.u ? unitCover(a, b.u.models, terrains, infantry(b.u)) : modelCover(a, b, terrains));
+  disposeTree(notes);
+  line(a, b, inR && vis ? YELLOW : RED, fmt(d) + (!los ? ' pas de LdV' : !vis ? ' cachée' : cover ? ' couvert' : ''));
+    if (inR && vis) {
+      fire(a, b, fxKind(weaponOf(a.u).name), a.u.type !== 'inf');
+      a.u.lastShot = turn; // the shooting unit can no longer be hidden this turn and next
+      refresh();
+    }
+    const extra = [
+      cover && ' – unité à couvert : CT -1',
+      plunging(a, b.u ? b.u.models : [b], groundY(), { towering: kw(a.u, 'TOWERING'), aircraft: kw(a.u, 'AIRCRAFT') || kw(b.u, 'AIRCRAFT') })
+        && ' – tir plongeant : CT +1',
+      indirect && !canSee(a, b, terrains) && ' – tir indirect sans visibilité : -1 touche, cible à couvert',
+      has(wp.abilities, 'TORRENT') && ' – Torrent : touche auto',
+      has(wp.abilities, 'RAPID FIRE') && toIn(d) <= rangeOf(a.u) / 2 + 1e-6 && ` – Tir rapide : +${wp.abilities.find((x) => /^RAPID FIRE/i.test(x)).split(' ').pop()} A`,
+      has(wp.abilities, 'MELTA') && toIn(d) <= rangeOf(a.u) / 2 + 1e-6 && ` – Melta : +${wp.abilities.find((x) => /^MELTA/i.test(x)).split(' ').pop()} D`,
+      a.u.damaged && a.wounds <= a.u.damaged && ' – tireur endommagé : -1 touche',
+    ].filter(Boolean).join('');
+  status(lone ? `Lone Operative : ciblable à 12" max (${fmt(d)})`
+    : !los ? `Pas de ligne de vue (${fmt(d)})`
+    : answer === 'none' ? `Pas de ligne de vue réelle : la cible est entièrement cachée (${fmt(d)})`
+    : !vis ? `Cible cachée : hors de sa portée de détection (${fmt(d)})`
+    : !inR ? `Hors de portée : ${fmt(d)} > ${wp.name} ${rangeOf(a.u)}"`
+    : `Tir à ${fmt(d)}${extra}`);
+}
+// Answer to "does the target stick out?" for the shot waiting in losAsk.
+let losAsk = null;
+function answerLos(answer) {
+  $('losAsk').hidden = true;
+  if (!losAsk) return;
+  const { a, b } = losAsk;
+  losAsk = null;
+  resolveShot(a, b, true, true, answer);
+}
+for (const btn of document.querySelectorAll('#losAsk [data-los]')) btn.onclick = () => answerLos(btn.dataset.los);
 
 // ---------- tap handlers (p = reticle hit in table-local real metres) ----------
 const handlers = {
@@ -657,30 +707,16 @@ const handlers = {
     const lone = !!b.u && loneOp(b.u) && toIn(d) > 12 + 1e-6; // Lone Operative: only targetable within 12"
     const los = indirect || canSee(a, b, terrains), vis = !lone && (indirect || canSee(a, b, terrains, hid));
     const inR = toIn(d) <= rangeOf(a.u) + 1e-6;
-    const cover = vis && (b.u ? unitCover(a, b.u.models, terrains, infantry(b.u)) : modelCover(a, b, terrains));
     pending = null;
     disposeTree(notes);
-    line(a, b, inR && vis ? YELLOW : RED, fmt(d) + (!los ? ' pas de LdV' : !vis ? ' cachée' : cover ? ' couvert' : ''));
-    if (inR && vis) {
-      fire(a, b, fxKind(weaponOf(a.u).name), a.u.type !== 'inf');
-      a.u.lastShot = turn; // the shooting unit can no longer be hidden this turn and next
-      refresh();
+    // one of them is within an obscuring area: the footprint can't tell, the player looks at the real models
+    if (inR && vis && !indirect && trueLosAreas(a, b, terrains).length) {
+      line(a, b, ORANGE, `${fmt(d)} LdV réelle ?`);
+      losAsk = { a, b };
+      $('losAsk').hidden = false;
+      return status(`Dans un décor : regarde les vraies figurines. La cible dépasse-t-elle (côtés ou dessus) ? (${fmt(d)})`);
     }
-    const extra = [
-      cover && ' – unité à couvert : CT -1',
-      plunging(a, b.u ? b.u.models : [b], groundY(), { towering: kw(a.u, 'TOWERING'), aircraft: kw(a.u, 'AIRCRAFT') || kw(b.u, 'AIRCRAFT') })
-        && ' – tir plongeant : CT +1',
-      indirect && !canSee(a, b, terrains) && ' – tir indirect sans visibilité : -1 touche, cible à couvert',
-      has(wp.abilities, 'TORRENT') && ' – Torrent : touche auto',
-      has(wp.abilities, 'RAPID FIRE') && toIn(d) <= rangeOf(a.u) / 2 + 1e-6 && ` – Tir rapide : +${wp.abilities.find((x) => /^RAPID FIRE/i.test(x)).split(' ').pop()} A`,
-      has(wp.abilities, 'MELTA') && toIn(d) <= rangeOf(a.u) / 2 + 1e-6 && ` – Melta : +${wp.abilities.find((x) => /^MELTA/i.test(x)).split(' ').pop()} D`,
-      a.u.damaged && a.wounds <= a.u.damaged && ' – tireur endommagé : -1 touche',
-    ].filter(Boolean).join('');
-    status(lone ? `Lone Operative : ciblable à 12" max (${fmt(d)})`
-      : !los ? `Pas de ligne de vue (${fmt(d)})`
-      : !vis ? `Cible cachée : hors de sa portée de détection (${fmt(d)})`
-      : !inR ? `Hors de portée : ${fmt(d)} > ${wp.name} ${rangeOf(a.u)}"`
-      : `Tir à ${fmt(d)}${extra}`);
+    resolveShot(a, b, los, vis, null);
   },
   // Lasso (table-local path): the models inside it move to a new unit, ready to link to an army-list entry.
   // If both sides are inside, the side with more models in the lasso is taken.
@@ -802,6 +838,7 @@ function inFrame(fn) {
   try { return fn(); } finally { refs = r; }
 }
 function tap(p) {
+  if (losAsk) (losAsk = null), ($('losAsk').hidden = true);
   // Repères change the frame the saved states are in: older undo steps would land in the wrong place
   if (mode === 'refs') undoStack.length = 0;
   const before = (mode === 'refs' || mode === 'calib') ? null : inFrame(() => JSON.stringify(snapshot()));
@@ -1120,6 +1157,7 @@ for (const b of document.querySelectorAll('#modes [data-mode]')) {
   b.onclick = () => {
     mode = b.dataset.mode;
     pending = null;
+    if (losAsk) (losAsk = null), ($('losAsk').hidden = true);
     for (const o of document.querySelectorAll('#modes [data-mode]')) o.classList.toggle('on', o === b);
     $('dmgLabel').hidden = mode !== 'wound';
     $('calibLabel').hidden = mode !== 'calib';
