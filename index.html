@@ -133,6 +133,11 @@
     <div class="row">
       <label>Socle <select id="base"></select></label>
       <label id="calibLabel" hidden>Règle <input id="calibLen" type="number" value="6" min="1">"</label>
+      <span id="zoneOpts" hidden>
+        <select id="deploy" aria-label="Déploiement"><option value="">Manuel (coins)</option></select>
+        <label>Attaquant <select id="attacker"><option value="1">J1</option><option value="2">J2</option></select></label>
+        <button id="deployPlace">Placer</button>
+      </span>
       <span id="terrainOpts" hidden>
         <select id="tType" aria-label="Type de décor">
           <option value="dense">Dense</option>

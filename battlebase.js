@@ -45,7 +45,12 @@ export function battleState(b) {
   const dep = b.battleSetupJson?.missionSelection?.deploymentId ?? '';
   const deployment = dep.replace(/^deployment-(chapter-approved-[\d-]+-|pariah-nexus-)?/, '').replace(/-\d{4}-\d{2}$/, '')
     .split('-').filter(Boolean).map((w) => w[0].toUpperCase() + w.slice(1)).join(' ');
-  return { round, turn: turns, phase, active: who, done, players, deployment };
+  // attacker as the app's side: J1 is the player who goes first
+  const set = b.battleSetupJson ?? {}, me = set.playersAndFactions?.meId, foe = set.opponentId;
+  const firstId = ev.find((e) => e.type === 'STARTED_TURN')?.actor ?? (set.isFirstTurnMe ? me : foe);
+  const attackerId = set.isAttackerMe ? me : foe;
+  const attackerSide = attackerId && firstId ? (attackerId === firstId ? 1 : 2) : 0;
+  return { round, turn: turns, phase, active: who, done, players, deployment, deploymentId: dep, attackerSide };
 }
 
 export function battleText(s) {

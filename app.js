@@ -6,6 +6,7 @@ import {
 } from './rules.js';
 import { parseArmyList, linesFromItems, fxKind, has } from './armylist.js';
 import { battleId, fetchBattle, battleState, battleText } from './battlebase.js';
+import { DEPLOYMENTS, layout, deploymentKey, TABLE } from './deployments.js';
 
 const $ = (id) => document.getElementById(id);
 const COLORS = [0x3fa9f5, 0xf5a623, 0xbd10e0, 0x50e3c2, 0xf8e71c, 0xff6f91, 0x9b9b9b, 0x7ed321];
@@ -937,7 +938,7 @@ const HINTS = {
   terrain: 'Décor : touche 2 coins d\'un côté, puis le côté opposé.',
   objective: 'Objectif : tape pour poser un pion, dans un décor pour en faire un objectif, sur un pion pour le retirer. Choix "Sécuriser" pour verrouiller un objectif.',
   refs: 'Repères : touche 2 points fixes de la table (ex. 2 coins). Refais-le pour recaler ou reprendre une partie.',
-  zone: 'Zone : choisis le camp, touche 2 coins d’un bord de la zone de déploiement, puis le bord opposé. Une zone en L = 2 rectangles.',
+  zone: 'Zone : choisis un déploiement et l’attaquant, puis Placer (Repères sur 2 coins d’un petit bord, sens horaire vu de dessus, le 1er dans la zone attaquante). En Manuel : choisis le camp, touche 2 coins d’un bord de la zone, puis le bord opposé.',
   calib: 'Calibrer : touche les 2 bouts d\'une règle de longueur connue.',
 };
 
@@ -1124,6 +1125,11 @@ async function bbPoll(id) {
       if (key !== bbSeen) for (let n = 0; (turn - 1) * PHASES.length + phase < target && n < 60; n++) nextPhase();
       bbSeen = key;
     }
+    // deployment and attacker from BattleBase, unless already picked by hand
+    if (!$('deploy').value && deploymentKey(s.deploymentId)) {
+      $('deploy').value = deploymentKey(s.deploymentId);
+      if (s.attackerSide) $('attacker').value = s.attackerSide;
+    }
   } catch (err) {
     $('bb').textContent = `BB : lecture impossible (${err.message})`;
   }
@@ -1256,6 +1262,7 @@ for (const b of document.querySelectorAll('#modes [data-mode]')) {
     $('dmgLabel').hidden = mode !== 'wound';
     $('calibLabel').hidden = mode !== 'calib';
     $('terrainOpts').hidden = mode !== 'terrain';
+    $('zoneOpts').hidden = mode !== 'zone';
     $('objAct').hidden = mode !== 'objective';
     $('undo').textContent = mode === 'terrain' ? 'Retirer décor' : mode === 'objective' ? 'Retirer pion' : mode === 'zone' ? 'Retirer zone' : 'Retirer fig.';
     status(HINTS[mode]);
@@ -1263,6 +1270,26 @@ for (const b of document.querySelectorAll('#modes [data-mode]')) {
 }
 // Taps on the controls must not also count as AR taps.
 $('ui').addEventListener('beforexrselect', (e) => e.target.closest('#panel, #status') && e.preventDefault());
+
+// Deployment cards: zones and the 5 objectives, from the Repères on 2 corners of a 44" edge (map top-left, then top-right)
+for (const [key, d] of Object.entries(DEPLOYMENTS)) $('deploy').add(new Option(d.name, key));
+$('deployPlace').onclick = () => {
+  const l = layout($('deploy').value);
+  if (!l) return status('Choisis un déploiement (Manuel : touche les coins sur la table)');
+  if (!refs) return status('Pose d’abord les Repères sur 2 coins d’un petit bord (44"), sens horaire vu de dessus, le 1er dans la zone attaquante');
+  const g = ([x, y]) => ({ ...fromFrame({ u: x * INCH, v: y * INCH }, refs.A, refs.B), y: refs.A.y });
+  const att = Number($('attacker').value);
+  for (const z of zones) removeObj(z.mesh);
+  for (const o of objectives) { if (o.tag) removeObj(o.tag); removeObj(o.mesh); }
+  zones.length = objectives.length = 0;
+  for (const p of l.att) addZone(p.map(g), refs.A.y, att);
+  for (const p of l.def) addZone(p.map(g), refs.A.y, 3 - att);
+  for (const o of l.objectives) addObjective(g(o));
+  refresh();
+  const edge = toIn(Math.hypot(refs.B.x - refs.A.x, refs.B.z - refs.A.z));
+  status(`${DEPLOYMENTS[$('deploy').value].name} placé : attaquant J${att}, 5 objectifs`
+    + (Math.abs(edge - TABLE.w) > 1 ? ` – attention, Repères à ${edge.toFixed(1)}" l’un de l’autre (${TABLE.w}" attendus : coins de la table ?)` : ''));
+};
 
 // Launch screen: pick the game to continue, delete one, or start a new one (optionally linked to a BattleBase battle).
 function switchGame(id) {
