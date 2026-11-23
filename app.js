@@ -1165,6 +1165,21 @@ const CHECKS = [
   'Lancement hors ligne sans le PC',
   'Ajout à l\'écran d\'accueil avec icône',
   'Partie à 2 téléphones (?room=) (optionnel)',
+  // added later: kept at the end, ticks are stored by position
+  'Vue penchée ~45° : point posé sous le doigt, mesure 12" juste (écart noté)',
+  'Vue rasante (<30°) : écart de pose / mesure noté',
+  '↶ Annuler défait la dernière action',
+  'Barre de distance en direct pendant Mesurer / Déplacer',
+  'Grouper : lasso au doigt, en vue penchée aussi',
+  'Liste : import du PDF BattleBase depuis le téléphone',
+  'Liste : unité liée, armes / portées / profils corrects',
+  'Tirer depuis un décor : question "La cible dépasse ?" affichée',
+  'Hauteur : figurine posée sur un étage affiche ↑x"',
+  'Choix de partie : reprendre / nouvelle / supprimer',
+  'BattleBase : bandeau PV / PC à jour (15 s)',
+  'BattleBase : la phase suit celle de BattleBase',
+  'Zone : déploiement placé depuis les Repères aux coins (objectifs aux bonnes cotes)',
+  'Zone : figurine hors zone signalée au déploiement',
 ];
 const checks = JSON.parse(store.get('checklist') || '{}');
 const saveChecks = () => store.set('checklist', JSON.stringify(checks));
