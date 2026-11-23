@@ -177,4 +177,10 @@ assert.ok(!whollyIn({ x: 0.95, z: 0.5, r: 0.1 }, [zA]), 'base pokes out');
 assert.ok(whollyIn({ x: 1, z: 0.5, r: 0.1 }, [zA, zB]), 'straddles 2 rectangles of the same zone');
 assert.ok(!whollyIn({ x: 0.5, z: 0.5, r: 0.1 }, []));
 
+// any outline: a dense triangle blocks the line through it, not the one passing beside its sloped side
+const tri = { poly: [P(-0.1, -0.1), P(0.1, -0.1), P(-0.1, 0.1)], type: 'dense' };
+assert.ok(!lineOfSight({ x: -0.05, z: -0.5, r: 0.01 }, { x: -0.05, z: 0.5, r: 0.01 }, [tri]));
+assert.ok(lineOfSight({ x: 0.4, z: -0.32, r: 0.01 }, { x: -0.32, z: 0.4, r: 0.01 }, [tri]), 'line in the empty half of the bounding box sees through');
+assert.ok(inArea({ x: -0.09, z: 0.05, r: 0 }, tri.poly) && !inArea({ x: 0.09, z: 0.05, r: 0 }, tri.poly), 'inside / outside the sloped side');
+
 console.log('rules ok');

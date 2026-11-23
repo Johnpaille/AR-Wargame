@@ -61,7 +61,7 @@ export function plunging(a, targets, groundY = 0, { towering = false, aircraft =
 }
 
 // ---------- terrain areas ----------
-// Terrain: { poly: [{x,z}x4], type: 'dense' | 'light' | 'exposed' }.
+// Terrain: { poly: [{x,z}, ...] any outline (triangle, L...), type: 'dense' | 'light' | 'exposed' }.
 // 13.10: areas containing light or dense features are obscuring.
 export const obscuring = (t) => t.type === 'dense' || t.type === 'light';
 

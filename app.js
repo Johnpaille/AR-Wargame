@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import {
-  INCH, BASES_MM, RULES, edgeDist, incoherent, engaged, inRange, chargeReach, newScale, toIn, rectFromTaps,
+  INCH, BASES_MM, RULES, edgeDist, incoherent, engaged, inRange, chargeReach, newScale, toIn,
   inArea, inPoly, modelCover, unitCover, control, toFrame, fromFrame, d6,
   hidden, canSee, halfStrength, leadershipPass, endPhaseOwner, PHASES, elevIn, moveDist, plunging, trueLosAreas, whollyIn,
 } from './rules.js';
@@ -146,7 +146,7 @@ const ringGeo = (r0, r1) => new THREE.RingGeometry(r0, r1, 48).rotateX(-Math.PI 
 const units = [];
 const terrains = []; // { poly, type, h, objective, mesh, tag }
 const objectives = []; // markers: { x, y, z, r, mesh, tag }
-const zones = []; // deployment zone rectangles: { poly, side, mesh }
+const zones = []; // deployment zone outlines: { poly, side, mesh }
 let sel = null, mode = 'place', pending = null, refs = null;
 // Turn = player turn (J1 plays odd turns). `started` flips at the first phase change: before that, removing a model is a setup fix.
 let turn = 1, phase = 0, started = false;
@@ -295,20 +295,19 @@ function removeModel(m) {
 }
 
 // ---------- terrain & objectives ----------
+// Any outline (triangle, L, ...): the footprint extruded to the terrain height.
 function addTerrain(poly, y, type, hIn, objective = false, owner = 0, secured = false) {
-  const [a, b, , d] = poly;
   const h = Math.max(hIn, 0.5) * INCH;
-  const geo = new THREE.BoxGeometry(Math.hypot(b.x - a.x, b.z - a.z), h, Math.hypot(d.x - a.x, d.z - a.z));
+  const geo = new THREE.ExtrudeGeometry(new THREE.Shape(poly.map((c) => new THREE.Vector2(c.x, -c.z))), { depth: h, bevelEnabled: false }).rotateX(-Math.PI / 2);
   const mesh = new THREE.Mesh(geo, TERRAIN[type].mat);
   mesh.add(new THREE.LineSegments(new THREE.EdgesGeometry(geo), objective ? objEdgeMat : edgeMat));
-  const cx = poly.reduce((s, c) => s + c.x, 0) / 4, cz = poly.reduce((s, c) => s + c.z, 0) / 4;
-  mesh.position.set(cx, y + h / 2, cz);
-  mesh.rotation.y = -Math.atan2(b.z - a.z, b.x - a.x);
+  const cx = poly.reduce((s, c) => s + c.x, 0) / poly.length, cz = poly.reduce((s, c) => s + c.z, 0) / poly.length;
+  mesh.position.y = y;
   mesh.renderOrder = 3;
   root.add(mesh);
   terrains.push({ poly: poly.map(({ x, z }) => ({ x, z })), y, type, h: hIn, objective, owner, secured, mesh, tag: null, top: new THREE.Vector3(cx, y + h + 0.03, cz) });
 }
-// Deployment zone: a flat tinted rectangle in the side colour, just above the table.
+// Deployment zone: a flat tinted outline in the side colour, just above the table.
 function addZone(poly, y, side) {
   const shape = new THREE.Shape(poly.map((c) => new THREE.Vector2(c.x, -c.z)));
   const mesh = new THREE.Mesh(new THREE.ShapeGeometry(shape).rotateX(-Math.PI / 2), terrainMat(parseInt(SIDE_CSS[side].slice(1), 16), 0.15));
@@ -794,34 +793,8 @@ const handlers = {
     refresh();
     status(`${uname(m.u)} : figurine détruite (${m.u.models.length}/${m.u.start})${half(m.u) ? ' – demi-effectif, test de moral au prochain Commandement' : ''}${deadlyDemise(m)}`);
   },
-  terrain(p) {
-    if (!pending) disposeTree(notes);
-    pending = [...(pending ?? []), p];
-    dot(p);
-    if (pending.length === 1) return status('Décor : touche le 2e coin du même côté');
-    if (pending.length === 2) return status('Décor : touche le côté opposé (profondeur)');
-    const [a, b, c] = pending, poly = rectFromTaps(a, b, c), type = $('tType').value;
-    pending = null;
-    disposeTree(notes);
-    if (!poly) return status('Décor trop petit, recommence');
-    addTerrain(poly, a.y, type, Number($('tH').value) || 0);
-    refresh();
-    status(`Décor ${terrains.length} (${TERRAIN[type].label}) ajouté`);
-  },
-  zone(p) {
-    if (!pending) disposeTree(notes);
-    pending = [...(pending ?? []), p];
-    dot(p);
-    if (pending.length === 1) return status('Zone : touche le 2e coin du même bord');
-    if (pending.length === 2) return status('Zone : touche le bord opposé (profondeur)');
-    const [a, b, c] = pending, poly = rectFromTaps(a, b, c), side = Number($('side').value);
-    pending = null;
-    disposeTree(notes);
-    if (!poly) return status('Zone trop petite, recommence');
-    addZone(poly, a.y, side);
-    refresh();
-    status(`Zone de déploiement J${side} : ${zonesOf(side).length} rectangle(s). Une zone en L = 2 rectangles.`);
-  },
+  terrain: (p) => polyTap(p, 'Décor'),
+  zone: (p) => polyTap(p, 'Zone'),
   // Poser: tap inside a terrain area toggles it as a terrain objective (14.01), tap a marker removes it, else places one.
   // Sécuriser: tap an objective to toggle "secured" for its current controller (14.03).
   objective(p) {
@@ -935,10 +908,10 @@ const HINTS = {
   move: 'Déplacer : touche la figurine, puis sa nouvelle position.',
   shoot: 'Tirer : touche le tireur, puis la cible.',
   wound: 'Blesser : règle les dégâts, puis tape une figurine. À 0 PV elle est retirée.',
-  terrain: 'Décor : touche 2 coins d\'un côté, puis le côté opposé.',
+  terrain: 'Décor : touche les coins un par un dans l’ordre (triangle, L, forme libre), puis le 1er coin (ou Fermer) pour terminer.',
   objective: 'Objectif : tape pour poser un pion, dans un décor pour en faire un objectif, sur un pion pour le retirer. Choix "Sécuriser" pour verrouiller un objectif.',
   refs: 'Repères : touche 2 points fixes de la table (ex. 2 coins). Refais-le pour recaler ou reprendre une partie.',
-  zone: 'Zone : choisis un déploiement et l’attaquant, puis Placer (Repères sur 2 coins d’un petit bord, sens horaire vu de dessus, le 1er dans la zone attaquante). En Manuel : choisis le camp, touche 2 coins d’un bord de la zone, puis le bord opposé.',
+  zone: 'Zone : choisis un déploiement et l’attaquant, puis Placer (Repères sur 2 coins d’un petit bord, sens horaire vu de dessus, le 1er dans la zone attaquante). En Manuel : choisis le camp, touche les coins de la zone dans l’ordre, puis le 1er coin (ou Fermer).',
   calib: 'Calibrer : touche les 2 bouts d\'une règle de longueur connue.',
 };
 
@@ -1278,6 +1251,7 @@ for (const b of document.querySelectorAll('#modes [data-mode]')) {
     $('calibLabel').hidden = mode !== 'calib';
     $('terrainOpts').hidden = mode !== 'terrain';
     $('zoneOpts').hidden = mode !== 'zone';
+    $('polyClose').hidden = !['terrain', 'zone'].includes(mode);
     $('objAct').hidden = mode !== 'objective';
     $('undo').textContent = mode === 'terrain' ? 'Retirer décor' : mode === 'objective' ? 'Retirer pion' : mode === 'zone' ? 'Retirer zone' : 'Retirer fig.';
     status(HINTS[mode]);
@@ -1285,6 +1259,37 @@ for (const b of document.querySelectorAll('#modes [data-mode]')) {
 }
 // Taps on the controls must not also count as AR taps.
 $('ui').addEventListener('beforexrselect', (e) => e.target.closest('#panel, #status') && e.preventDefault());
+
+// Terrain / zone outline: tap the corners in order, then the first corner again (or Fermer) to close it.
+function polyTap(p, what) {
+  const first = pending?.[0];
+  if (first && pending.length >= 3 && Math.hypot(p.x - first.x, p.z - first.z) < INCH) return closePoly();
+  if (!pending) disposeTree(notes), (pending = []);
+  const last = pending.at(-1);
+  pending.push(p);
+  dot(p);
+  if (last) line({ ...last, r: 0 }, { ...p, r: 0 }, WHITE, fmt(Math.hypot(p.x - last.x, p.z - last.z)));
+  status(`${what} : ${pending.length} point(s). ${pending.length >= 3 ? 'Touche le 1er point (ou Fermer) pour terminer.' : 'Touche le coin suivant.'}`);
+}
+function closePoly() {
+  if (!['terrain', 'zone'].includes(mode) || !(pending?.length >= 3)) return status('Il faut au moins 3 points');
+  const pts = pending.map(({ x, y, z }) => ({ x, y, z })), y = pts[0].y;
+  pending = null;
+  disposeTree(notes);
+  if (Math.abs(polyArea(pts)) < INCH * INCH) return status('Forme trop petite (moins d’1 pouce carré), recommence');
+  if (mode === 'terrain') {
+    const type = $('tType').value;
+    addTerrain(pts, y, type, Number($('tH').value) || 0);
+    refresh();
+    return status(`Décor ${terrains.length} (${TERRAIN[type].label}, ${pts.length} coins) ajouté`);
+  }
+  const side = Number($('side').value);
+  addZone(pts, y, side);
+  refresh();
+  status(`Zone de déploiement J${side} ajoutée (${pts.length} coins)`);
+}
+const polyArea = (p) => p.reduce((a, c, i) => { const n = p[(i + 1) % p.length]; return a + (c.x * n.z - n.x * c.z) / 2; }, 0);
+$('polyClose').onclick = closePoly;
 
 // Deployment cards: zones and the 5 objectives, from the Repères on 2 corners of a 44" edge (map top-left, then top-right)
 for (const [key, d] of Object.entries(DEPLOYMENTS)) $('deploy').add(new Option(d.name, key));
