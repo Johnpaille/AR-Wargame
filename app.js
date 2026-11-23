@@ -53,7 +53,8 @@ const hitPose = new THREE.Matrix4();
 
 const notes = new THREE.Group(); // measure lines + labels
 const refMarks = new THREE.Group(); // reference points
-root.add(notes, refMarks);
+const live = new THREE.Group(); // live distance while aiming the 2nd point
+root.add(notes, refMarks, live);
 
 // ---------- depth occlusion (WebXR depth-sensing, CPU path, optional) ----------
 // Virtual fragments farther than the real surface ARCore measured are dropped, so rings and auras hide behind real minis and terrain.
@@ -341,14 +342,14 @@ function pick(p) {
 const target = (p) => pick(p) ?? { x: p.x, y: p.y, z: p.z, r: 0 };
 
 // Edge-to-edge bar between two points/models, with a distance label.
-function line(a, b, color, text) {
+function line(a, b, color, text, group = notes) {
   const dx = b.x - a.x, dz = b.z - a.z, L = Math.hypot(dx, dz) || 1, ux = dx / L, uz = dz / L;
   const s = new THREE.Vector3(a.x + ux * a.r, a.y + 0.003, a.z + uz * a.r);
   const e = new THREE.Vector3(b.x - ux * b.r, b.y + 0.003, b.z - uz * b.r);
   const bar = new THREE.Mesh(new THREE.BoxGeometry(Math.max(s.distanceTo(e), 0.001), 0.001, 0.003), new THREE.MeshBasicMaterial({ color }));
   bar.position.lerpVectors(s, e, 0.5);
   bar.rotation.y = -Math.atan2(e.z - s.z, e.x - s.x);
-  notes.add(bar, label(text, bar.position.clone().setY(bar.position.y + 0.04)));
+  group.add(bar, label(text, bar.position.clone().setY(bar.position.y + 0.04)));
 }
 function dot(p, group = notes, color = WHITE) {
   const m = new THREE.Mesh(new THREE.SphereGeometry(0.004, 8, 8), new THREE.MeshBasicMaterial({ color }));
@@ -416,7 +417,7 @@ function restore(s, keepView = false) {
   refresh();
 }
 function autosave() {
-  if (!refs) return;
+  if (!refs || refs === LOCAL) return; // LOCAL: undo restore in progress, not a real table frame
   store.set('game', JSON.stringify(snapshot()));
   // an empty table is never broadcast, so joining a room can't wipe the other player's game
   if (!room || applyingRemote || !(units.length || terrains.length || objectives.length)) return;
@@ -439,6 +440,7 @@ function applyRemote(s) {
   applyingRemote = true;
   try {
     restore(s, true);
+    undoStack.length = 0; // undoing now would overwrite the other player's change
     lastSync = JSON.stringify(snapshot());
     if (units[selIdx]) selectUnit(units[selIdx]);
     pending = pend ? units[pend[0]]?.models[pend[1]] ?? null : keep;
@@ -480,7 +482,7 @@ const handlers = {
   },
   measure(p) {
     const pt = target(p);
-    if (!pending) return disposeTree(notes), dot(pt), (pending = pt), status('Mesure : vise le 2e point');
+    if (!pending) return disposeTree(notes), dot(pt), (pending = pt), status('Mesure : touche le 2e point');
     const d = edgeDist(pending, pt);
     line(pending, pt, WHITE, fmt(d));
     pending = null;
@@ -489,10 +491,10 @@ const handlers = {
   move(p) {
     if (!pending) {
       const m = pick(p);
-      if (!m) return status('Vise une figurine à déplacer');
+      if (!m) return status('Touche une figurine à déplacer');
       pending = m;
       selectUnit(m.u);
-      return status(`Vise la nouvelle position (max ${allowedMove(m.u)}")`);
+      return status(`Touche la nouvelle position (max ${allowedMove(m.u)}")`);
     }
     const m = pending, max = allowedMove(m.u);
     pending = null;
@@ -508,10 +510,10 @@ const handlers = {
   shoot(p) {
     if (!pending) {
       const m = pick(p);
-      if (!m) return status('Vise un tireur');
+      if (!m) return status('Touche un tireur');
       pending = m;
       selectUnit(m.u);
-      return status(`Vise la cible (${weaponOf(m.u).name} ${rangeOf(m.u)}")`);
+      return status(`Touche la cible (${weaponOf(m.u).name} ${rangeOf(m.u)}")`);
     }
     const a = pending, b = target(p), d = edgeDist(a, b);
     const hid = !!b.u && isHidden(b);
@@ -534,7 +536,7 @@ const handlers = {
   // Allocate damage to one model; excess damage is lost, a model at 0 wounds is destroyed.
   wound(p) {
     const m = pick(p);
-    if (!m) return status('Vise une figurine');
+    if (!m) return status('Touche une figurine');
     const dmg = Math.max(1, Number($('dmg').value) || 1);
     m.wounds -= dmg;
     if (m.wounds > 0) return refresh(), status(`${uname(m.u)} : figurine à ${m.wounds}/${m.u.w} PV`);
@@ -546,8 +548,8 @@ const handlers = {
     if (!pending) disposeTree(notes);
     pending = [...(pending ?? []), p];
     dot(p);
-    if (pending.length === 1) return status('Décor : vise le 2e coin du même côté');
-    if (pending.length === 2) return status('Décor : vise le côté opposé (profondeur)');
+    if (pending.length === 1) return status('Décor : touche le 2e coin du même côté');
+    if (pending.length === 2) return status('Décor : touche le côté opposé (profondeur)');
     const [a, b, c] = pending, poly = rectFromTaps(a, b, c), type = $('tType').value;
     pending = null;
     disposeTree(notes);
@@ -563,7 +565,7 @@ const handlers = {
     const t = !o && terrains.find((q) => inArea({ ...p, r: 0 }, q.poly));
     if ($('objAct').value === 'secure') {
       const target = o ?? (t?.objective ? t : null);
-      if (!target) return status('Vise un objectif');
+      if (!target) return status('Touche un objectif');
       if (!target.owner) return status('Objectif contrôlé par personne : rien à sécuriser');
       target.secured = !target.secured;
       refresh();
@@ -587,7 +589,7 @@ const handlers = {
     status(`Objectif ${objectives.length} posé (portée ${RULES.objective}")`);
   },
   refs(p) {
-    if (!pending) return disposeTree(notes), dot(p), (pending = p), status('Repère 2 : vise le 2e point de référence');
+    if (!pending) return disposeTree(notes), dot(p), (pending = p), status('Repère 2 : touche le 2e point de référence');
     const A = pending, B = p, dist = Math.hypot(B.x - A.x, B.z - A.z);
     pending = null;
     disposeTree(notes);
@@ -605,7 +607,7 @@ const handlers = {
     status(before ? `Recalé (${gapTxt})` : `Partie restaurée : ${units.length} unité(s) (${gapTxt})`);
   },
   calib(p) {
-    if (!pending) return disposeTree(notes), dot(p), (pending = p), status('Calibration : vise l\'autre bout de la règle');
+    if (!pending) return disposeTree(notes), dot(p), (pending = p), status('Calibration : touche l\'autre bout de la règle');
     const d = Math.hypot(p.x - pending.x, p.z - pending.z), real = Number($('calibLen').value);
     pending = null;
     if (!(d > 0.01 && real > 0)) return status('Calibration annulée : points trop proches');
@@ -617,16 +619,60 @@ const handlers = {
   },
 };
 
+// Undo: game state before each tap that changed it. Without Repères the table-local frame is used (origin = first tap).
+const LOCAL = { A: { x: 0, y: 0, z: 0 }, B: { x: 1, y: 0, z: 0 } };
+const undoStack = [];
+function inFrame(fn) {
+  const r = refs;
+  refs = r ?? LOCAL;
+  try { return fn(); } finally { refs = r; }
+}
+function tap(p) {
+  // Repères change the frame the saved states are in: older undo steps would land in the wrong place
+  if (mode === 'refs') undoStack.length = 0;
+  const before = (mode === 'refs' || mode === 'calib') ? null : inFrame(() => JSON.stringify(snapshot()));
+  handlers[mode](p);
+  if (before && before !== inFrame(() => JSON.stringify(snapshot()))) undoStack.push(before) > 30 && undoStack.shift();
+}
+$('undoAct').onclick = () => {
+  const s = undoStack.pop();
+  if (!s) return status('Rien à annuler');
+  inFrame(() => restore(JSON.parse(s)));
+  status(`Action annulée (${undoStack.length} restante(s))`);
+};
+
+// Live bar from the first point (measure / move / shoot) to where the finger or reticle is now.
+let liveKey = '';
+function preview(p) {
+  let a = null, b = null, color = WHITE, d = 0;
+  if (p && pending?.x !== undefined) {
+    if (mode === 'measure') { a = pending; b = target(p); d = edgeDist(a, b); }
+    else if (mode === 'move' && pending.u) {
+      a = { ...pending, r: 0 }; b = { ...p, r: 0 }; d = Math.hypot(p.x - a.x, p.z - a.z);
+      color = toIn(d) > allowedMove(pending.u) + 1e-6 ? RED : GREEN;
+    } else if (mode === 'shoot' && pending.u) {
+      a = pending; b = target(p); d = edgeDist(a, b);
+      color = toIn(d) <= rangeOf(a.u) + 1e-6 ? YELLOW : RED;
+    }
+  }
+  // rebuilt only when the end point moves by 2 mm or more
+  const key = a ? [a.x, a.z, b.x, b.z].map((v) => Math.round(v * 500)).join() + color : '';
+  if (key === liveKey) return;
+  liveKey = key;
+  disposeTree(live);
+  if (a) line(a, b, color, fmt(d), live);
+}
+
 const HINTS = {
-  place: 'Poser : vise un socle et tape. Taper une figurine existante sélectionne son unité.',
-  measure: 'Mesurer : vise 2 points ou figurines (socle à socle).',
-  move: 'Déplacer : vise la figurine, puis sa nouvelle position.',
-  shoot: 'Tirer : vise le tireur, puis la cible.',
+  place: 'Poser : tape sur un socle (le point se pose au lever du doigt). Taper une figurine existante sélectionne son unité.',
+  measure: 'Mesurer : touche 2 points ou figurines (socle à socle).',
+  move: 'Déplacer : touche la figurine, puis sa nouvelle position.',
+  shoot: 'Tirer : touche le tireur, puis la cible.',
   wound: 'Blesser : règle les dégâts, puis tape une figurine. À 0 PV elle est retirée.',
-  terrain: 'Décor : vise 2 coins d\'un côté, puis le côté opposé.',
+  terrain: 'Décor : touche 2 coins d\'un côté, puis le côté opposé.',
   objective: 'Objectif : tape pour poser un pion, dans un décor pour en faire un objectif, sur un pion pour le retirer. Choix "Sécuriser" pour verrouiller un objectif.',
-  refs: 'Repères : vise 2 points fixes de la table (ex. 2 coins). Refais-le pour recaler ou reprendre une partie.',
-  calib: 'Calibrer : vise les 2 bouts d\'une règle de longueur connue.',
+  refs: 'Repères : touche 2 points fixes de la table (ex. 2 coins). Refais-le pour recaler ou reprendre une partie.',
+  calib: 'Calibrer : touche les 2 bouts d\'une règle de longueur connue.',
 };
 
 // 'select' fires when the finger lifts. The point goes where the finger was (last hit of that touch),
@@ -645,7 +691,7 @@ function onSelect(e) {
       e.frame.createAnchor?.(new XRRigidTransform(pos, q), renderer.xr.getReferenceSpace())?.then((a) => { anchor = a; anchorOffset = new THREE.Matrix4(); }).catch(() => {});
     }
   }
-  handlers[mode](root.worldToLocal(new THREE.Vector3().setFromMatrixPosition(pose)));
+  tap(root.worldToLocal(new THREE.Vector3().setFromMatrixPosition(pose)));
 }
 
 // ---------- UI ----------
@@ -805,7 +851,8 @@ $('occl').checked = !!store.get('occl');
 if (location.hash === '#debug') {
   window.dbg = {
     handlers, units, terrains, objectives, store, occ,
-    tap: (m, x, z) => handlers[m]({ x, y: 0, z }),
+    tap: (m, x, z) => { mode = m; tap({ x, y: 0, z }); },
+    undoStack, preview,
     setMode: (m) => document.querySelector(`[data-mode=${m}]`).click(),
     compile: () => renderer.compile(scene, camera), // forces every shader (incl. occlusion patch) to build
     renderer, scene, THREE,
@@ -855,7 +902,7 @@ $('enter').onclick = async () => {
   session.addEventListener('select', onSelect);
   session.addEventListener('end', () => {
     // the next session has a new world origin: positions only survive through the saved reference frame
-    hitSource = null; touchSource = null; touchHits.clear(); anchor = null; anchorPending = false; anchorOffset = null; rootPose = null; refs = null; xrSession = null; occlusionOn = false; occ.uOn.value = 0;
+    hitSource = null; touchSource = null; touchHits.clear(); undoStack.length = 0; anchor = null; anchorPending = false; anchorOffset = null; rootPose = null; refs = null; xrSession = null; occlusionOn = false; occ.uOn.value = 0;
     clearAll();
     disposeTree(refMarks);
     $('saved').hidden = !store.get('game');
@@ -865,7 +912,7 @@ $('enter').onclick = async () => {
   $('ui').hidden = false;
   status((wantDepth && !occlusionOn ? 'Occlusion non disponible sur ce téléphone. ' : '')
     + (room ? `Partie partagée « ${room} » : pose les Repères sur les mêmes points que l'adversaire. ` : '')
-    + (store.get('game') || remoteState ? 'Partie à reprendre : mode Repères, vise les 2 mêmes points.' : 'Conseil : Calibrer, puis Repères, puis Poser.'));
+    + (store.get('game') || remoteState ? 'Partie à reprendre : mode Repères, touche les 2 mêmes points.' : 'Conseil : Calibrer, puis Repères, puis Poser.'));
 };
 
 renderer.setAnimationLoop((t, frame) => {
@@ -900,6 +947,7 @@ renderer.setAnimationLoop((t, frame) => {
       const s = mode === 'place' ? (Number($('base').value) / 2000) * k : 0.01;
       reticle.matrix.copy(show).multiply(tmp.makeScale(s, s, s));
     }
+    preview(show && root.worldToLocal(new THREE.Vector3().setFromMatrixPosition(show)));
     updateDepth(frame, ref);
   }
   animate();

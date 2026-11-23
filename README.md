@@ -25,6 +25,8 @@ Recommended order: **Calibrer**, **Repères**, then place terrain, objectives an
 - **Unit sheet** (tap the unit name): name, type (Infanterie/Bête/Nuée or Véhicule/Monstre/autre, drives cover and Hidden), M, OC, Ld, PV (W) and a list of weapons with their ranges. The weapon picker next to the unit name chooses which range the aura, halos and shots use.
 - **Blesser**: set the damage, tap a model. Models with more than 1 PV show their remaining wounds; at 0 the model is removed (excess damage is lost).
 - **▾** folds the tool rows, leaving only the mode bar.
+- **↶ Annuler**: undoes the last tap that changed the game (placing, moving, wounds, terrain, objectives), up to 30 steps. Cleared by Repères, by an update from the other phone and when AR stops. Buttons (phase, morale, Retirer fig., unit sheet) are not undone.
+- **Live distance**: in Mesurer, Déplacer and Tirer, after the first tap a bar shows the distance to the finger (or reticle) until the second tap, coloured like the final result.
 - **Tests** (end of the mode bar): on-device test checklist. Ticks and notes are kept on the phone; **Copier le rapport** copies them to the clipboard.
 - **Phase button** (`T1 J1 · Commandement ›`): ends the current phase. Objective control is settled at each phase end; after Combat the next player's turn starts (J1 plays odd turns) and the app lists the units that must take a battle-shock test.
 - **Moral 2D6**: battle-shock roll for the selected unit (2D6 ≥ Ld). Battle-shocked units have OC '-'. The unit label shows `n/start`, `½` at half-strength, `ébranlée`, `cachée`.
