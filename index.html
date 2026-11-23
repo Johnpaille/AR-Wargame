@@ -15,6 +15,8 @@
   #start button { font-size: 20px; padding: 14px 28px; }
   #ui { position: fixed; inset: 0; pointer-events: none; display: flex; flex-direction: column; justify-content: space-between; }
   #ui[hidden] { display: none; }
+  #bb { margin: -6px 12px 0; padding: 4px 10px; background: var(--btn); border-radius: 8px; text-align: center; font-size: 13px; }
+  #bb[hidden] { display: none; }
   #status { pointer-events: auto; margin: 12px; padding: 8px 12px; background: var(--btn); border-radius: 8px; text-align: center; }
   #panel { pointer-events: auto; padding: 6px; display: grid; gap: 4px; font-size: 14px; }
   #panel.folded > .row:not(#modes) { display: none; }
@@ -56,6 +58,8 @@
 </div>
 <div id="ui" hidden>
   <div id="status">Touche la table.</div>
+  <!-- BattleBase live score (read-only), filled from the link in the Liste panel -->
+  <div id="bb" hidden></div>
   <div id="panel">
     <!-- on-device test checklist, opened by the Tests button; ticks and notes stay in localStorage -->
     <div id="checklist" hidden>
@@ -83,6 +87,10 @@
         <button id="armyClose">Fermer</button>
       </div>
       <div id="armySummary"></div>
+      <div class="row">
+        <input id="bbLink" class="name" placeholder="Lien de partie BattleBase" aria-label="Lien de partie BattleBase">
+        <button id="bbFollow">Suivre</button>
+      </div>
     </div>
     <!-- unit sheet, opened by tapping the unit name -->
     <div id="sheet" hidden>

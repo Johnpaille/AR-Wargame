@@ -1,7 +1,7 @@
 // Offline support: once loaded over USB, the phone can start the app without the PC.
 // App files: network first (dev edits still arrive), cache as fallback. three.js CDN: cache first.
-const CACHE = 'wargame-ar-v2';
-const SHELL = ['./', 'index.html', 'app.js', 'rules.js', 'armylist.js', 'manifest.webmanifest', 'icon.svg',
+const CACHE = 'wargame-ar-v3';
+const SHELL = ['./', 'index.html', 'app.js', 'rules.js', 'armylist.js', 'battlebase.js', 'manifest.webmanifest', 'icon.svg',
   'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js'];
 
 self.addEventListener('install', (e) => e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting())));

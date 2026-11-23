@@ -5,6 +5,7 @@ import {
   hidden, canSee, halfStrength, leadershipPass, endPhaseOwner, PHASES, elevIn, moveDist, plunging, trueLosAreas,
 } from './rules.js';
 import { parseArmyList, linesFromItems, fxKind, has } from './armylist.js';
+import { battleId, fetchBattle, battleState, battleText } from './battlebase.js';
 
 const $ = (id) => document.getElementById(id);
 const COLORS = [0x3fa9f5, 0xf5a623, 0xbd10e0, 0x50e3c2, 0xf8e71c, 0xff6f91, 0x9b9b9b, 0x7ed321];
@@ -1054,6 +1055,30 @@ $('armyImport').onclick = async () => {
 };
 $('side').addEventListener('change', renderList);
 renderList();
+
+// BattleBase live score: paste the battle's share link, read every 15 s (read-only, link kept on this phone only)
+let bbTimer = 0;
+async function bbPoll(id) {
+  try {
+    $('bb').textContent = battleText(battleState(await fetchBattle(id)));
+  } catch (err) {
+    $('bb').textContent = `BB : lecture impossible (${err.message})`;
+  }
+}
+function bbFollow(link) {
+  clearInterval(bbTimer);
+  const id = battleId(link);
+  store.set('bbLink', id ? link : null);
+  $('bb').hidden = !id;
+  $('bbFollow').textContent = id ? 'Arrêter' : 'Suivre';
+  if (!id) return link && status('Lien BattleBase non reconnu (attendu : battlebase.app/battles/…)');
+  $('bb').textContent = 'BB : lecture…';
+  bbPoll(id);
+  bbTimer = setInterval(() => bbPoll(id), 15000);
+}
+$('bbFollow').onclick = () => bbFollow(store.get('bbLink') ? '' : $('bbLink').value.trim());
+$('bbLink').value = store.get('bbLink') || '';
+if ($('bbLink').value) bbFollow($('bbLink').value);
 
 // on-device test checklist
 const CHECKS = [
