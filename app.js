@@ -629,16 +629,23 @@ const HINTS = {
   calib: 'Calibrer : vise les 2 bouts d\'une règle de longueur connue.',
 };
 
+// 'select' fires when the finger lifts. The point goes where the finger was (last hit of that touch),
+// falling back to the centre reticle on phones without transient hit-test.
 function onSelect(e) {
-  if (!reticle.visible) return status('Pas de surface détectée : bouge un peu le téléphone au-dessus de la table.');
-  const ref = renderer.xr.getReferenceSpace();
+  const touch = touchHits.get(e.inputSource);
+  touchHits.delete(e.inputSource);
+  const pose = touch ?? (reticle.visible ? hitPose.clone() : null);
+  if (!pose) return status('Pas de surface sous le doigt : bouge un peu le téléphone au-dessus de la table.');
   if (!rootPose) {
-    setRoot(hitPose.clone());
-    const pos = new THREE.Vector3(), q = new THREE.Quaternion();
-    hitPose.decompose(pos, q, new THREE.Vector3());
-    e.frame.createAnchor?.(new XRRigidTransform(pos, q), ref)?.then((a) => (anchor = a)).catch(() => {});
+    setRoot(pose.clone());
+    // no plane-attached anchors on this browser: fall back to a free-space anchor
+    if (!window.XRHitTestResult?.prototype.createAnchor) {
+      const pos = new THREE.Vector3(), q = new THREE.Quaternion();
+      pose.decompose(pos, q, new THREE.Vector3());
+      e.frame.createAnchor?.(new XRRigidTransform(pos, q), renderer.xr.getReferenceSpace())?.then((a) => { anchor = a; anchorOffset = new THREE.Matrix4(); }).catch(() => {});
+    }
   }
-  handlers[mode](root.worldToLocal(new THREE.Vector3().setFromMatrixPosition(hitPose)));
+  handlers[mode](root.worldToLocal(new THREE.Vector3().setFromMatrixPosition(pose)));
 }
 
 // ---------- UI ----------
@@ -674,6 +681,47 @@ $('fold').onclick = () => {
   store.set('folded', folded ? '1' : null);
 };
 if (store.get('folded')) $('fold').click();
+
+// on-device test checklist
+const CHECKS = [
+  'Calibrer : règle de 6" mesurée à 6" (±0,1") avec Mesurer',
+  'Mètre ruban : 12" et 24" mesurés, écart noté',
+  'Point posé là où le doigt se lève (pas au centre)',
+  'Points collés aux figurines / décors / table (pas flottants)',
+  'Après 5 min, figurines toujours en place (sinon Repères recale)',
+  'Étiquettes lisibles à 50 cm',
+  'Panneau ne gêne pas (▾ replie)',
+  'Auras mouvement / arme à la bonne taille',
+  'Ligne de vue bloquée par un décor dense',
+  'Occlusion : anneau caché derrière une figurine (si cochée au départ)',
+  'Reprise de partie après fermeture (Repères sur les mêmes points)',
+  'Lancement hors ligne sans le PC',
+  'Ajout à l\'écran d\'accueil avec icône',
+  'Partie à 2 téléphones (?room=) (optionnel)',
+];
+const checks = JSON.parse(store.get('checklist') || '{}');
+const saveChecks = () => store.set('checklist', JSON.stringify(checks));
+$('checkItems').replaceChildren(...CHECKS.map((text, i) => {
+  const l = document.createElement('label'), c = document.createElement('input');
+  c.type = 'checkbox'; c.checked = !!checks[i];
+  c.onchange = () => { checks[i] = c.checked; saveChecks(); };
+  l.append(c, text);
+  return l;
+}));
+$('checkNotes').value = checks.notes || '';
+$('checkNotes').oninput = () => { checks.notes = $('checkNotes').value; saveChecks(); };
+$('checkOpen').onclick = () => ($('checklist').hidden = !$('checklist').hidden);
+$('checkClose').onclick = () => ($('checklist').hidden = true);
+$('checkReset').onclick = () => {
+  CHECKS.forEach((_, i) => (checks[i] = false));
+  for (const c of $('checkItems').querySelectorAll('input')) c.checked = false;
+  saveChecks();
+};
+$('checkCopy').onclick = () => {
+  const txt = CHECKS.map((t, i) => `[${checks[i] ? 'x' : ' '}] ${t}`).join('\n') + (checks.notes ? `\n\nNotes : ${checks.notes}` : '');
+  if (!navigator.clipboard) return status('Copie indisponible ici');
+  navigator.clipboard.writeText(txt).then(() => status('Rapport copié'), () => status('Copie refusée par le navigateur'));
+};
 
 // End of phase: settle objective control (14.02, 14.03), then move on. After the Fight phase, the next player's turn starts.
 $('phase').onclick = () => {
@@ -768,7 +816,14 @@ if (location.hash === '#debug') {
 if ('serviceWorker' in navigator && location.hash !== '#debug') navigator.serviceWorker.register('sw.js').catch(() => {});
 
 // ---------- session ----------
-let hitSource = null;
+let hitSource = null, touchSource = null, anchorPending = false, anchorOffset = null;
+const touchHits = new Map(); // touch input source -> last hit pose under the finger
+// Hit-test 'point' (feature points) as well as 'plane', so taps land on minis and terrain, not on a guessed plane.
+// Browsers that reject entityTypes get the default (planes only).
+const hitTestSource = (session, opts) =>
+  session[opts.space ? 'requestHitTestSource' : 'requestHitTestSourceForTransientInput']({ ...opts, entityTypes: ['plane', 'point'] })
+    .catch(() => session[opts.space ? 'requestHitTestSource' : 'requestHitTestSourceForTransientInput'](opts))
+    .catch(() => null);
 (async () => {
   const ok = navigator.xr && (await navigator.xr.isSessionSupported('immersive-ar').catch(() => false));
   $('support').textContent = ok ? 'ARCore prêt.' : 'AR indisponible : il faut Chrome Android + ARCore, page servie en https ou localhost.';
@@ -794,11 +849,13 @@ $('enter').onclick = async () => {
   occlusionOn = wantDepth && (session.enabledFeatures?.includes('depth-sensing') ?? true);
   await renderer.xr.setSession(session);
   const viewer = await session.requestReferenceSpace('viewer');
+  // centre reticle: planes only, it is the stable table surface used for anchoring
   hitSource = await session.requestHitTestSource({ space: viewer });
+  touchSource = session.requestHitTestSourceForTransientInput ? await hitTestSource(session, { profile: 'generic-touchscreen' }) : null;
   session.addEventListener('select', onSelect);
   session.addEventListener('end', () => {
     // the next session has a new world origin: positions only survive through the saved reference frame
-    hitSource = null; anchor = null; rootPose = null; refs = null; xrSession = null; occlusionOn = false; occ.uOn.value = 0;
+    hitSource = null; touchSource = null; touchHits.clear(); anchor = null; anchorPending = false; anchorOffset = null; rootPose = null; refs = null; xrSession = null; occlusionOn = false; occ.uOn.value = 0;
     clearAll();
     disposeTree(refMarks);
     $('saved').hidden = !store.get('game');
@@ -814,17 +871,34 @@ $('enter').onclick = async () => {
 renderer.setAnimationLoop((t, frame) => {
   if (frame) {
     const ref = renderer.xr.getReferenceSpace();
-    if (anchor) {
+    if (anchor && anchorOffset) {
       const ap = frame.getPose(anchor.anchorSpace, ref);
-      if (ap) setRoot(new THREE.Matrix4().fromArray(ap.transform.matrix));
+      if (ap) setRoot(new THREE.Matrix4().fromArray(ap.transform.matrix).multiply(anchorOffset));
     }
     const hits = hitSource ? frame.getHitTestResults(hitSource) : [];
-    reticle.visible = hits.length > 0;
-    if (reticle.visible) {
-      hitPose.fromArray(hits[0].getPose(ref).transform.matrix);
+    if (hits.length) hitPose.fromArray(hits[0].getPose(ref).transform.matrix);
+    // Anchor the table frame to the detected plane (moves with ARCore's plane refinements, so points stay on the table).
+    // Hit results only live in their frame, so it is done here, keeping the root's offset from that anchor.
+    if (rootPose && !anchor && !anchorPending && hits[0]?.createAnchor) {
+      anchorPending = true;
+      const at = hitPose.clone();
+      hits[0].createAnchor().then((a) => { anchorOffset = at.invert().multiply(rootPose); anchor = a; }).catch(() => (anchorPending = false));
+    }
+    // touches: remember the hit under each finger; the reticle follows the finger while it is down
+    let touchPose = null;
+    if (touchSource) {
+      for (const { inputSource, results } of frame.getHitTestResultsForTransientInput(touchSource)) {
+        if (!results.length) continue;
+        touchPose = new THREE.Matrix4().fromArray(results[0].getPose(ref).transform.matrix);
+        touchHits.set(inputSource, touchPose);
+      }
+    }
+    const show = touchPose ?? (hits.length ? hitPose : null);
+    reticle.visible = !!show;
+    if (show) {
       // in place mode the reticle previews the chosen base size
       const s = mode === 'place' ? (Number($('base').value) / 2000) * k : 0.01;
-      reticle.matrix.copy(hitPose).multiply(tmp.makeScale(s, s, s));
+      reticle.matrix.copy(show).multiply(tmp.makeScale(s, s, s));
     }
     updateDepth(frame, ref);
   }

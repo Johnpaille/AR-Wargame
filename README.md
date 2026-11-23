@@ -17,12 +17,15 @@ WebXR app (Chrome Android + ARCore) that overlays measurements on a real tableto
 
 Recommended order: **Calibrer**, **Repères**, then place terrain, objectives and models.
 
+**Taps**: a point goes where the finger lifts (the reticle follows the finger while it is down). Taps hit ARCore feature points as well as planes, so they land on minis and terrain instead of a guessed plane. Phones without touch hit-test fall back to the centre reticle. The table frame is anchored to the detected plane, so it follows ARCore's plane refinements.
+
 - **Calibrer**: aim at both ends of a ruler, enter its real length.
 - **Repères**: aim at 2 fixed points of the table (e.g. 2 corners). The game is then saved continuously, relative to those points. Do it again to fix tracking drift, or after restarting the app to resume the saved game. "Nouvelle partie" on the start screen forgets the save.
 - **Poser**: aim at a base and tap. Pick base size first (the reticle previews it). Tap an existing model to select its unit. **+ Unité** starts a new unit, **J1/J2** sets its side.
 - **Unit sheet** (tap the unit name): name, type (Infanterie/Bête/Nuée or Véhicule/Monstre/autre, drives cover and Hidden), M, OC, Ld, PV (W) and a list of weapons with their ranges. The weapon picker next to the unit name chooses which range the aura, halos and shots use.
 - **Blesser**: set the damage, tap a model. Models with more than 1 PV show their remaining wounds; at 0 the model is removed (excess damage is lost).
 - **▾** folds the tool rows, leaving only the mode bar.
+- **Tests** (end of the mode bar): on-device test checklist. Ticks and notes are kept on the phone; **Copier le rapport** copies them to the clipboard.
 - **Phase button** (`T1 J1 · Commandement ›`): ends the current phase. Objective control is settled at each phase end; after Combat the next player's turn starts (J1 plays odd turns) and the app lists the units that must take a battle-shock test.
 - **Moral 2D6**: battle-shock roll for the selected unit (2D6 ≥ Ld). Battle-shocked units have OC '-'. The unit label shows `n/start`, `½` at half-strength, `ébranlée`, `cachée`.
 - **Retirer fig.**: before the first phase change it fixes the deployment (starting strength follows); afterwards it is a casualty.
