@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import {
   INCH, BASES_MM, RULES, edgeDist, incoherent, engaged, inRange, chargeReach, newScale, toIn, rectFromTaps,
   inArea, inPoly, modelCover, unitCover, control, toFrame, fromFrame, d6,
-  hidden, canSee, halfStrength, leadershipPass, endPhaseOwner, PHASES, elevIn, moveDist, plunging, trueLosAreas,
+  hidden, canSee, halfStrength, leadershipPass, endPhaseOwner, PHASES, elevIn, moveDist, plunging, trueLosAreas, whollyIn,
 } from './rules.js';
 import { parseArmyList, linesFromItems, fxKind, has } from './armylist.js';
 import { battleId, fetchBattle, battleState, battleText } from './battlebase.js';
@@ -145,6 +145,7 @@ const ringGeo = (r0, r1) => new THREE.RingGeometry(r0, r1, 48).rotateX(-Math.PI 
 const units = [];
 const terrains = []; // { poly, type, h, objective, mesh, tag }
 const objectives = []; // markers: { x, y, z, r, mesh, tag }
+const zones = []; // deployment zone rectangles: { poly, side, mesh }
 let sel = null, mode = 'place', pending = null, refs = null;
 // Turn = player turn (J1 plays odd turns). `started` flips at the first phase change: before that, removing a model is a setup fix.
 let turn = 1, phase = 0, started = false;
@@ -306,6 +307,15 @@ function addTerrain(poly, y, type, hIn, objective = false, owner = 0, secured = 
   root.add(mesh);
   terrains.push({ poly: poly.map(({ x, z }) => ({ x, z })), y, type, h: hIn, objective, owner, secured, mesh, tag: null, top: new THREE.Vector3(cx, y + h + 0.03, cz) });
 }
+// Deployment zone: a flat tinted rectangle in the side colour, just above the table.
+function addZone(poly, y, side) {
+  const shape = new THREE.Shape(poly.map((c) => new THREE.Vector2(c.x, -c.z)));
+  const mesh = new THREE.Mesh(new THREE.ShapeGeometry(shape).rotateX(-Math.PI / 2), terrainMat(parseInt(SIDE_CSS[side].slice(1), 16), 0.15));
+  mesh.position.y = y + 0.0005;
+  root.add(mesh);
+  zones.push({ poly: poly.map(({ x, z }) => ({ x, z })), side, mesh });
+}
+const zonesOf = (side) => zones.filter((z) => z.side === side).map((z) => z.poly);
 function setTerrainObjective(t, on) {
   t.objective = on;
   t.mesh.children[0].material = on ? objEdgeMat : edgeMat;
@@ -514,13 +524,15 @@ function snapshot() {
         models: models.map((m) => ({ ...f(m), r: m.r, wounds: m.wounds, p: m.p })) })),
     terrains: terrains.map((t) => ({ poly: t.poly.map(f), type: t.type, h: t.h, objective: t.objective, owner: t.owner, secured: t.secured })),
     objectives: objectives.map((o) => ({ ...f(o), owner: o.owner, secured: o.secured })),
+    zones: zones.map((z) => ({ poly: z.poly.map(f), side: z.side })),
   };
 }
 function clearAll(keepView = false) {
   for (const u of units) removeObj(u.group);
   for (const t of terrains) { if (t.tag) removeObj(t.tag); removeObj(t.mesh); }
   for (const o of objectives) { if (o.tag) removeObj(o.tag); removeObj(o.mesh); }
-  units.length = terrains.length = objectives.length = 0;
+  for (const z of zones) removeObj(z.mesh);
+  units.length = terrains.length = objectives.length = zones.length = 0;
   turn = 1; phase = 0; started = false;
   sel = null;
   pending = null;
@@ -540,6 +552,7 @@ function restore(s, keepView = false) {
   }
   for (const t of s.terrains) addTerrain(t.poly.map(g), refs.A.y, TERRAIN[t.type] ? t.type : 'dense', Number(t.h) || 0, t.objective, t.owner, t.secured);
   for (const o of s.objectives) addObjective(g(o), o.owner, o.secured);
+  for (const z of s.zones ?? []) addZone(z.poly.map(g), refs.A.y, z.side);
   refresh();
 }
 function autosave() {
@@ -684,8 +697,11 @@ const handlers = {
     refresh();
     const placed = sel.models.at(-1);
     // Deep Strike reminder once the battle has started: set up more than 9" from enemy models
+    // deployment (before the first phase change): wholly within the side's zone, if zones are drawn
+    const out = !started && zonesOf(sel.side).length && !whollyIn(placed, zonesOf(sel.side));
     const foe = started && has(sel.abilities, 'Deep Strike') ? Math.min(...enemiesOf(sel.side).map((e) => toIn(edgeDist(placed, e)))) : Infinity;
     status(`${uname(sel)} : ${sel.models.length}${sel.size ? '/' + sel.size : ''} figurine(s)${profOf(placed) ? ` – ${profOf(placed).name}` : ''}`
+      + (out ? ' – HORS zone de déploiement' : '')
       + (foe < 9 ? ` – Frappe en profondeur : ${foe.toFixed(1)}" d'un ennemi (9" min)` : ''));
   },
   measure(p) {
@@ -790,6 +806,20 @@ const handlers = {
     addTerrain(poly, a.y, type, Number($('tH').value) || 0);
     refresh();
     status(`Décor ${terrains.length} (${TERRAIN[type].label}) ajouté`);
+  },
+  zone(p) {
+    if (!pending) disposeTree(notes);
+    pending = [...(pending ?? []), p];
+    dot(p);
+    if (pending.length === 1) return status('Zone : touche le 2e coin du même bord');
+    if (pending.length === 2) return status('Zone : touche le bord opposé (profondeur)');
+    const [a, b, c] = pending, poly = rectFromTaps(a, b, c), side = Number($('side').value);
+    pending = null;
+    disposeTree(notes);
+    if (!poly) return status('Zone trop petite, recommence');
+    addZone(poly, a.y, side);
+    refresh();
+    status(`Zone de déploiement J${side} : ${zonesOf(side).length} rectangle(s). Une zone en L = 2 rectangles.`);
   },
   // Poser: tap inside a terrain area toggles it as a terrain objective (14.01), tap a marker removes it, else places one.
   // Sécuriser: tap an objective to toggle "secured" for its current controller (14.03).
@@ -907,6 +937,7 @@ const HINTS = {
   terrain: 'Décor : touche 2 coins d\'un côté, puis le côté opposé.',
   objective: 'Objectif : tape pour poser un pion, dans un décor pour en faire un objectif, sur un pion pour le retirer. Choix "Sécuriser" pour verrouiller un objectif.',
   refs: 'Repères : touche 2 points fixes de la table (ex. 2 coins). Refais-le pour recaler ou reprendre une partie.',
+  zone: 'Zone : choisis le camp, touche 2 coins d’un bord de la zone de déploiement, puis le bord opposé. Une zone en L = 2 rectangles.',
   calib: 'Calibrer : touche les 2 bouts d\'une règle de longueur connue.',
 };
 
@@ -1080,9 +1111,19 @@ renderList();
 
 // BattleBase live score: paste the battle's share link, read every 15 s (read-only, link kept on this phone only)
 let bbTimer = 0;
+let bbSeen = '';
 async function bbPoll(id) {
   try {
-    $('bb').textContent = battleText(battleState(await fetchBattle(id)));
+    const s = battleState(await fetchBattle(id));
+    $('bb').textContent = battleText(s);
+    // phase sync: only when BattleBase moved since the last read, and only forward (the phase button stays usable),
+    // stepping through each phase end so objective control and battle-shock work as if tapped
+    const key = `${s.turn}/${s.phase}`;
+    if (refs && s.turn && !s.done) {
+      const target = (s.turn - 1) * PHASES.length + Math.max(PHASES.indexOf(s.phase), 0);
+      if (key !== bbSeen) for (let n = 0; (turn - 1) * PHASES.length + phase < target && n < 60; n++) nextPhase();
+      bbSeen = key;
+    }
   } catch (err) {
     $('bb').textContent = `BB : lecture impossible (${err.message})`;
   }
@@ -1144,7 +1185,8 @@ $('checkCopy').onclick = () => {
 };
 
 // End of phase: settle objective control (14.02, 14.03), then move on. After the Fight phase, the next player's turn starts.
-$('phase').onclick = () => {
+$('phase').onclick = () => nextPhase();
+function nextPhase() {
   for (const o of [...objectives, ...terrains.filter((t) => t.objective)]) Object.assign(o, endPhaseOwner(o.owner, o.secured, control(o, units)));
   started = true;
   phase = (phase + 1) % PHASES.length;
@@ -1157,7 +1199,7 @@ $('phase').onclick = () => {
   // 08.03 battle-shock step: the active player tests units that are battle-shocked or at/below half-strength
   const due = units.filter((u) => u.side === activeSide() && (u.shocked || half(u)));
   status(`Tour ${turn}, J${activeSide()} – ` + (due.length ? `tests de moral : ${due.map((u) => u.name).join(', ')}` : 'aucun test de moral'));
-};
+}
 // Battle-shock roll (01.07): 2D6 >= Ld, else battle-shocked (OC '-').
 $('morale').onclick = () => {
   if (!sel) return status('Sélectionne une unité d\'abord');
@@ -1188,6 +1230,11 @@ $('undo').onclick = () => {
     if (t) { if (t.tag) removeObj(t.tag); removeObj(t.mesh); refresh(); }
     return;
   }
+  if (mode === 'zone') {
+    const z = zones.pop();
+    if (z) { removeObj(z.mesh); refresh(); }
+    return;
+  }
   if (mode === 'objective') {
     const o = objectives.pop();
     if (o) { if (o.tag) removeObj(o.tag); removeObj(o.mesh); refresh(); }
@@ -1210,7 +1257,7 @@ for (const b of document.querySelectorAll('#modes [data-mode]')) {
     $('calibLabel').hidden = mode !== 'calib';
     $('terrainOpts').hidden = mode !== 'terrain';
     $('objAct').hidden = mode !== 'objective';
-    $('undo').textContent = mode === 'terrain' ? 'Retirer décor' : mode === 'objective' ? 'Retirer pion' : 'Retirer fig.';
+    $('undo').textContent = mode === 'terrain' ? 'Retirer décor' : mode === 'objective' ? 'Retirer pion' : mode === 'zone' ? 'Retirer zone' : 'Retirer fig.';
     status(HINTS[mode]);
   };
 }

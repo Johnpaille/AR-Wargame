@@ -18,6 +18,9 @@ const b = { createdBy: A, opponent: B, isFinished: false, eventsJson: [
 const s = battleState(b);
 assert.deepEqual(s.players, [{ name: 'p1', vp: 15, cp: 0 }, { name: 'p2', vp: 7, cp: 3 }]);
 assert.equal(s.round, 1);
+assert.equal(s.turn, 2);
+assert.equal(battleState({ ...b, battleSetupJson: { missionSelection: { deploymentId: 'deployment-chapter-approved-2026-27-tipping-point' } } }).deployment, 'Tipping Point');
+assert.equal(battleState({ ...b, battleSetupJson: { missionSelection: { deploymentId: 'deployment-king-of-the-colosseum-2025-26' } } }).deployment, 'King Of The Colosseum');
 assert.equal(s.phase, 'Commandement');
 assert.equal(s.active, 1);
 assert.equal(battleText(s), 'BB · R1 Commandement (p2) · p1 15PV 0PC | p2 7PV 3PC');

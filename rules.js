@@ -97,6 +97,11 @@ function segDist(p, a, b) {
 // shortcut: "any part of the base" reading of "within", check against the rulebook FAQ.
 export const inArea = (m, poly) => inPoly(m, poly) || poly.some((a, i) => segDist(m, a, poly[(i + 1) % poly.length]) < (m.r ?? 0));
 
+// Deployment: the base is wholly within the union of a player's zone rectangles (an L-shaped zone is 2 rectangles).
+// shortcut: centre + 8 rim points, a base poking out by under ~4% of its radius between two samples passes.
+export const whollyIn = (m, polys) => [[0, 0], ...[...Array(8)].map((_, i) => [Math.cos(i * Math.PI / 4), Math.sin(i * Math.PI / 4)])]
+  .every(([i, j]) => polys.some((poly) => inPoly({ x: m.x + i * m.r, z: m.z + j * m.r }, poly)));
+
 const crossesPoly = (p, q, poly) => poly.some((a, i) => segHit(p, q, a, poly[(i + 1) % poly.length])) || inPoly(p, poly) || inPoly(q, poly);
 
 // Sample points on a base: centre + 4 rim points. A point target (r=0) is just itself.

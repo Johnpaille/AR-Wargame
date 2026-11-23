@@ -1,7 +1,7 @@
 // Run: node rules.test.mjs
 import assert from 'node:assert/strict';
 import {
-  INCH, edgeDist, incoherent, engaged, inRange, chargeReach, newScale, toIn, rectFromTaps, segHit, inPoly, inArea,
+  INCH, edgeDist, incoherent, engaged, inRange, chargeReach, newScale, toIn, rectFromTaps, segHit, inPoly, inArea, whollyIn,
   lineOfSight, modelCover, unitCover, control, toFrame, fromFrame, d6,
 } from './rules.js';
 import { vOk, elevIn, moveDist, plunging, inObjRange, trueLosAreas } from './rules.js';
@@ -169,5 +169,12 @@ assert.ok(plunging(H(0, 0), [H(gap(10), 0)], 0, { towering: true }), 'TOWERING w
 assert.ok(!plunging(H(0, 0), [H(gap(13), 0)], 0, { towering: true }));
 const mk = { x: 0, z: 0, r: 0.02, y: 0 };
 assert.ok(inObjRange(H(gap(2), 4), mk) && !inObjRange(H(gap(2), 6), mk), 'objective: 5" vertically (14.01.01)');
+
+// deployment zones: wholly within the union of rectangles
+const zA = [{ x: 0, z: 0 }, { x: 1, z: 0 }, { x: 1, z: 1 }, { x: 0, z: 1 }], zB = zA.map((p) => ({ x: p.x + 1, z: p.z }));
+assert.ok(whollyIn({ x: 0.5, z: 0.5, r: 0.1 }, [zA]));
+assert.ok(!whollyIn({ x: 0.95, z: 0.5, r: 0.1 }, [zA]), 'base pokes out');
+assert.ok(whollyIn({ x: 1, z: 0.5, r: 0.1 }, [zA, zB]), 'straddles 2 rectangles of the same zone');
+assert.ok(!whollyIn({ x: 0.5, z: 0.5, r: 0.1 }, []));
 
 console.log('rules ok');
