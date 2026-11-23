@@ -12,7 +12,10 @@
   :root { --bg: #111; --fg: #f2f2f2; --btn: rgba(30,30,30,.85); --on: #3fa9f5; }
   body { margin: 0; background: var(--bg); color: var(--fg); font: 16px system-ui, sans-serif; }
   #start { padding: 24px 16px; text-align: center; }
-  #start button { font-size: 20px; padding: 14px 28px; }
+  #start #enter { font-size: 20px; padding: 14px 28px; }
+  #games { display: grid; gap: 6px; margin-bottom: 8px; }
+  #games button:first-child { flex: 1; text-align: left; }
+  #gForm input { width: auto; flex: 1; min-width: 10em; }
   #ui { position: fixed; inset: 0; pointer-events: none; display: flex; flex-direction: column; justify-content: space-between; }
   #ui[hidden] { display: none; }
   #bb { margin: -6px 12px 0; padding: 4px 10px; background: var(--btn); border-radius: 8px; text-align: center; font-size: 13px; }
@@ -53,8 +56,14 @@
   <button id="enter" disabled>Démarrer AR</button>
   <p><label><input id="occl" type="checkbox" style="width:auto"> Occlusion par la profondeur (expérimental)</label></p>
   <p>Calibre avec une règle, pose 2 repères sur la table, puis les figurines.</p>
-  <p id="saved" hidden>Une partie est sauvegardée : en AR, mode Repères sur les 2 mêmes points pour la reprendre.
-    <button id="forget">Nouvelle partie</button></p>
+  <h2>Parties</h2>
+  <p id="gHint"></p>
+  <div id="games"></div>
+  <div class="row" id="gForm">
+    <input id="gName" placeholder="Nom (optionnel)" aria-label="Nom de la nouvelle partie">
+    <input id="gBB" placeholder="Lien BattleBase (optionnel)" aria-label="Lien de partie BattleBase">
+    <button id="gNew">Nouvelle partie</button>
+  </div>
 </div>
 <div id="ui" hidden>
   <div id="status">Touche la table.</div>

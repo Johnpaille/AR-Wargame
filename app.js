@@ -18,6 +18,26 @@ const store = {
   set: (key, v) => { try { v == null ? localStorage.removeItem(key) : localStorage.setItem(key, v); } catch {} },
 };
 
+// Saved games: an index (name, last save, turn, unit count) + per-game keys "<key>:<id>" (state, army lists, BattleBase link).
+// Switching game reloads the page, so every per-game value is read once at start.
+const GAME_KEYS = ['game', 'armies', 'armiesAt', 'bbLink'];
+const games = JSON.parse(store.get('games') || '[]');
+let cur = store.get('cur');
+if (!games.length) { // first run, or a single save from before multi-games: it becomes "Partie 1"
+  const old = JSON.parse(store.get('game') || 'null');
+  games.push({ id: 'g1', name: 'Partie 1', at: Date.now(), turn: old?.turn ?? 1, units: old?.units.length ?? 0 });
+  for (const key of GAME_KEYS) {
+    const v = store.get(key);
+    if (v != null) { store.set(`${key}:g1`, v); store.set(key, null); }
+  }
+}
+if (!games.some((g) => g.id === cur)) cur = games[0].id;
+const saveGames = () => store.set('games', JSON.stringify(games));
+saveGames();
+store.set('cur', cur);
+const gstore = { get: (key) => store.get(`${key}:${cur}`), set: (key, v) => store.set(`${key}:${cur}`, v) };
+const curGame = () => games.find((g) => g.id === cur);
+
 // Multiplayer: open the page with ?room=name on each phone; the game state is relayed by serve.js.
 const room = new URLSearchParams(location.search).get('room');
 const clientId = Math.random().toString(36).slice(2);
@@ -524,7 +544,9 @@ function restore(s, keepView = false) {
 }
 function autosave() {
   if (!refs || refs === LOCAL) return; // LOCAL: undo restore in progress, not a real table frame
-  store.set('game', JSON.stringify(snapshot()));
+  gstore.set('game', JSON.stringify(snapshot()));
+  Object.assign(curGame(), { at: Date.now(), turn, units: units.length });
+  saveGames();
   // an empty table is never broadcast, so joining a room can't wipe the other player's game
   if (!room || applyingRemote || !(units.length || terrains.length || objectives.length)) return;
   clearTimeout(sendTimer);
@@ -807,7 +829,7 @@ const handlers = {
     if (dist < 0.05) return status('Repères trop proches (5 cm minimum)');
     const before = refs ? snapshot() : null;
     // in a room, the shared game wins over this phone's own save
-    const saved = !before && !units.length && !terrains.length && !objectives.length ? remoteState ?? JSON.parse(store.get('game') || 'null') : null;
+    const saved = !before && !units.length && !terrains.length && !objectives.length ? remoteState ?? JSON.parse(gstore.get('game') || 'null') : null;
     remoteState = null;
     refs = { A, B };
     drawRefs();
@@ -955,8 +977,8 @@ if (store.get('folded')) $('fold').click();
 // ---------- army lists ----------
 // One imported list per side (localStorage). Picking a list entry links the selected unit to it (if not linked yet,
 // so models already placed keep their place) or creates a new linked unit; its profile and weapons are copied.
-const armies = JSON.parse(store.get('armies') || '{}');
-const armiesAt = JSON.parse(store.get('armiesAt') || '{}'); // side -> import time, to keep the newest list per side
+const armies = JSON.parse(gstore.get('armies') || '{}');
+const armiesAt = JSON.parse(gstore.get('armiesAt') || '{}'); // side -> import time, to keep the newest list per side
 function mergeArmies(remote) {
   if (!remote || typeof remote !== 'object') return;
   let got = 0;
@@ -968,8 +990,8 @@ function mergeArmies(remote) {
     got++;
   }
   if (!got) return;
-  store.set('armies', JSON.stringify(armies));
-  store.set('armiesAt', JSON.stringify(armiesAt));
+  gstore.set('armies', JSON.stringify(armies));
+  gstore.set('armiesAt', JSON.stringify(armiesAt));
   renderList();
 }
 const PDFJS = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/';
@@ -1044,8 +1066,8 @@ $('armyImport').onclick = async () => {
     if (!list.length) return status('Aucune unité reconnue (format attendu : export BattleBase, "NOM 150 PTS" puis les profils)');
     armies[$('side').value] = list;
     armiesAt[$('side').value] = Date.now();
-    store.set('armies', JSON.stringify(armies));
-    store.set('armiesAt', JSON.stringify(armiesAt));
+    gstore.set('armies', JSON.stringify(armies));
+    gstore.set('armiesAt', JSON.stringify(armiesAt));
     autosave(); // shared with the other phone (with the next game change if the table is still empty)
     renderList();
     status(`Liste J${$('side').value} importée : ${list.length} unités. Choisis-les dans le menu à côté de l'arme.`);
@@ -1068,7 +1090,7 @@ async function bbPoll(id) {
 function bbFollow(link) {
   clearInterval(bbTimer);
   const id = battleId(link);
-  store.set('bbLink', id ? link : null);
+  gstore.set('bbLink', id ? link : null);
   $('bb').hidden = !id;
   $('bbFollow').textContent = id ? 'Arrêter' : 'Suivre';
   if (!id) return link && status('Lien BattleBase non reconnu (attendu : battlebase.app/battles/…)');
@@ -1076,8 +1098,8 @@ function bbFollow(link) {
   bbPoll(id);
   bbTimer = setInterval(() => bbPoll(id), 15000);
 }
-$('bbFollow').onclick = () => bbFollow(store.get('bbLink') ? '' : $('bbLink').value.trim());
-$('bbLink').value = store.get('bbLink') || '';
+$('bbFollow').onclick = () => bbFollow(gstore.get('bbLink') ? '' : $('bbLink').value.trim());
+$('bbLink').value = gstore.get('bbLink') || '';
 if ($('bbLink').value) bbFollow($('bbLink').value);
 
 // on-device test checklist
@@ -1195,9 +1217,52 @@ for (const b of document.querySelectorAll('#modes [data-mode]')) {
 // Taps on the controls must not also count as AR taps.
 $('ui').addEventListener('beforexrselect', (e) => e.target.closest('#panel, #status') && e.preventDefault());
 
-const savedGame = store.get('game');
-$('saved').hidden = !savedGame;
-$('forget').onclick = () => { store.set('game', null); $('saved').hidden = true; };
+// Launch screen: pick the game to continue, delete one, or start a new one (optionally linked to a BattleBase battle).
+function switchGame(id) {
+  store.set('cur', id);
+  location.reload();
+}
+function renderGames() {
+  const g = curGame();
+  $('gHint').textContent = gstore.get('game')
+    ? `Partie choisie : ${g.name}. Pour la reprendre en AR : mode Repères, touche les 2 mêmes points.`
+    : `Partie choisie : ${g.name} (vide).`;
+  $('games').replaceChildren(...[...games].sort((a, b) => b.at - a.at).map((x) => {
+    const row = document.createElement('div');
+    row.className = 'row';
+    const pick = document.createElement('button'), del = document.createElement('button');
+    const when = new Date(x.at).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' });
+    pick.textContent = `${x.name} · ${when} · ${x.units ? `T${x.turn} · ${x.units} unité(s)` : 'vide'}${store.get(`bbLink:${x.id}`) ? ' · BB' : ''}`;
+    if (x.id === cur) pick.className = 'on';
+    pick.onclick = () => x.id !== cur && switchGame(x.id);
+    del.textContent = '✕';
+    del.setAttribute('aria-label', `Supprimer ${x.name}`);
+    del.onclick = () => {
+      if (!confirm(`Supprimer « ${x.name} » ? Positions, listes et lien BattleBase seront perdus.`)) return;
+      for (const key of GAME_KEYS) store.set(`${key}:${x.id}`, null);
+      games.splice(games.indexOf(x), 1);
+      saveGames();
+      if (x.id === cur) switchGame(games[0]?.id ?? ''); // none left: a fresh "Partie 1" is made on reload
+      else renderGames();
+    };
+    row.append(pick, del);
+    return row;
+  }));
+}
+$('gNew').onclick = async () => {
+  const link = $('gBB').value.trim(), bid = battleId(link);
+  if (link && !bid) return ($('gHint').textContent = 'Lien BattleBase non reconnu (attendu : battlebase.app/battles/…)');
+  let name = $('gName').value.trim();
+  if (!name && bid) {
+    try { const b = await fetchBattle(bid); name = `${b.createdBy.username} vs ${b.opponent.username}`; } catch {}
+  }
+  const id = `g${Date.now().toString(36)}`;
+  games.push({ id, name: name || `Partie ${games.length + 1}`, at: Date.now(), turn: 1, units: 0 });
+  saveGames();
+  if (bid) store.set(`bbLink:${id}`, link);
+  switchGame(id);
+};
+renderGames();
 $('occl').checked = !!store.get('occl');
 
 // Desktop testing without AR: open index.html#debug, then call dbg.tap(mode, x, z) from the console (metres).
@@ -1261,14 +1326,14 @@ $('enter').onclick = async () => {
     hitSource = null; touchSource = null; touchHits.clear(); undoStack.length = 0; anchor = null; anchorPending = false; anchorOffset = null; rootPose = null; refs = null; xrSession = null; occlusionOn = false; occ.uOn.value = 0;
     clearAll();
     disposeTree(refMarks);
-    $('saved').hidden = !store.get('game');
+    renderGames();
     $('ui').hidden = true; $('start').hidden = false;
   });
   $('start').hidden = true;
   $('ui').hidden = false;
   status((wantDepth && !occlusionOn ? 'Occlusion non disponible sur ce téléphone. ' : '')
     + (room ? `Partie partagée « ${room} » : pose les Repères sur les mêmes points que l'adversaire. ` : '')
-    + (store.get('game') || remoteState ? 'Partie à reprendre : mode Repères, touche les 2 mêmes points.' : 'Conseil : Calibrer, puis Repères, puis Poser.'));
+    + (gstore.get('game') || remoteState ? 'Partie à reprendre : mode Repères, touche les 2 mêmes points.' : 'Conseil : Calibrer, puis Repères, puis Poser.'));
 };
 
 renderer.setAnimationLoop((t, frame) => {
