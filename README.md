@@ -22,6 +22,7 @@ Recommended order: **Calibrer**, **Repères**, then place terrain, objectives an
 - **Calibrer**: aim at both ends of a ruler, enter its real length.
 - **Repères**: aim at 2 fixed points of the table (e.g. 2 corners). The game is then saved continuously, relative to those points. Do it again to fix tracking drift, or after restarting the app to resume the saved game. "Nouvelle partie" on the start screen forgets the save.
 - **Poser**: aim at a base and tap. Pick base size first (the reticle previews it). Tap an existing model to select its unit. **+ Unité** starts a new unit, **J1/J2** sets its side.
+- **Grouper**: keep the finger down and circle models on the table (the line follows the finger), then lift: the models inside move to a new unit and units left empty are removed. If both sides are inside, the side with more models in the circle is taken. Then link the new unit with the **Liste** menu. Fast set-up: place every model with Poser, then circle each unit.
 - **Unit sheet** (tap the unit name): name, type (Infanterie/Bête/Nuée or Véhicule/Monstre/autre, drives cover and Hidden), M, OC, Ld, PV (W) and a list of weapons with their ranges. The weapon picker next to the unit name chooses which range the aura, halos and shots use.
 - **Blesser**: set the damage, tap a model. Models with more than 1 PV show their remaining wounds; at 0 the model is removed (excess damage is lost).
 - **▾** folds the tool rows, leaving only the mode bar.

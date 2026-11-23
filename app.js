@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import {
   INCH, BASES_MM, RULES, edgeDist, incoherent, engaged, inRange, chargeReach, newScale, toIn, rectFromTaps,
-  inArea, modelCover, unitCover, control, toFrame, fromFrame, d6,
+  inArea, inPoly, modelCover, unitCover, control, toFrame, fromFrame, d6,
   hidden, canSee, halfStrength, leadershipPass, endPhaseOwner, PHASES,
 } from './rules.js';
 import { parseArmyList, linesFromItems, fxKind } from './armylist.js';
@@ -55,7 +55,8 @@ const hitPose = new THREE.Matrix4();
 const notes = new THREE.Group(); // measure lines + labels
 const refMarks = new THREE.Group(); // reference points
 const live = new THREE.Group(); // live distance while aiming the 2nd point
-root.add(notes, refMarks, live);
+const lassoG = new THREE.Group(); // Grouper: the line drawn by the finger
+root.add(notes, refMarks, live, lassoG);
 
 // ---------- depth occlusion (WebXR depth-sensing, CPU path, optional) ----------
 // Virtual fragments farther than the real surface ARCore measured are dropped, so rings and auras hide behind real minis and terrain.
@@ -591,6 +592,30 @@ const handlers = {
       : !inR ? `Hors de portée : ${fmt(d)} > ${weaponOf(a.u).name} ${rangeOf(a.u)}"`
       : `Tir à ${fmt(d)}${cover ? ' – unité à couvert : CT -1' : ''}`);
   },
+  // Lasso (table-local path): the models inside it move to a new unit, ready to link to an army-list entry.
+  // If both sides are inside, the side with more models in the lasso is taken.
+  group(path) {
+    if (!Array.isArray(path) || path.length < 3) return status('Grouper : entoure les figurines d’un trait du doigt (doigt posé, puis lâché)');
+    const inside = units.flatMap((u) => u.models).filter((m) => inPoly(m, path));
+    if (!inside.length) return status('Aucune figurine dans le tracé');
+    const n1 = inside.filter((m) => m.u.side === 1).length, side = n1 * 2 >= inside.length ? 1 : 2;
+    const picked = inside.filter((m) => m.u.side === side);
+    $('side').value = side; // newUnit() takes its side from the picker
+    const donors = new Set(picked.map((m) => m.u)), u = newUnit();
+    for (const m of picked) {
+      m.u.models.splice(m.u.models.indexOf(m), 1);
+      u.group.add(m.mesh);
+      m.u = u;
+      u.models.push(m);
+    }
+    u.start = u.models.length;
+    for (const d of donors) {
+      if (!started) d.start = d.models.length; // still deploying: the donor's starting strength follows
+      if (!d.models.length) units.splice(units.indexOf(d), 1), removeObj(d.group);
+    }
+    selectUnit(u);
+    status(`${picked.length} figurine(s) regroupée(s) dans ${uname(u)}${$('listUnit').hidden ? '' : ' : choisis son profil dans le menu Liste'}`);
+  },
   // Allocate damage to one model; excess damage is lost, a model at 0 wounds is destroyed.
   wound(p) {
     const m = pick(p);
@@ -723,6 +748,7 @@ function preview(p) {
 }
 
 const HINTS = {
+  group: 'Grouper : entoure des figurines au doigt pour en faire une nouvelle unité, puis lie-la à la liste.',
   place: 'Poser : tape sur un socle (le point se pose au lever du doigt). Taper une figurine existante sélectionne son unité.',
   measure: 'Mesurer : touche 2 points ou figurines (socle à socle).',
   move: 'Déplacer : touche la figurine, puis sa nouvelle position.',
@@ -736,9 +762,20 @@ const HINTS = {
 
 // 'select' fires when the finger lifts. The point goes where the finger was (last hit of that touch),
 // falling back to the centre reticle on phones without transient hit-test.
+let lasso = null; // table-local points traced while the finger is down in Grouper mode
+function drawLasso() {
+  disposeTree(lassoG);
+  if (lasso?.length > 1) lassoG.add(new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(lasso.map((p) => new THREE.Vector3(p.x, p.y + 0.003, p.z))), new THREE.LineBasicMaterial({ color: WHITE })));
+}
 function onSelect(e) {
   const touch = touchHits.get(e.inputSource);
   touchHits.delete(e.inputSource);
+  if (mode === 'group') {
+    const path = lasso ?? [];
+    lasso = null;
+    drawLasso();
+    return tap(path);
+  }
   const pose = touch ?? (reticle.visible ? hitPose.clone() : null);
   if (!pose) return status('Pas de surface sous le doigt : bouge un peu le téléphone au-dessus de la table.');
   if (!rootPose) {
@@ -964,6 +1001,7 @@ if (location.hash === '#debug') {
   window.dbg = {
     handlers, units, terrains, objectives, store, occ,
     tap: (m, x, z) => { mode = m; tap({ x, y: 0, z }); },
+    lasso: (pts) => { mode = 'group'; tap(pts.map(([x, z]) => ({ x, y: 0, z }))); },
     undoStack, preview, fire, explode, fx, animate, // effects: call animate() to step them when rAF is throttled
     setMode: (m) => document.querySelector(`[data-mode=${m}]`).click(),
     compile: () => renderer.compile(scene, camera), // forces every shader (incl. occlusion patch) to build
@@ -1012,6 +1050,8 @@ $('enter').onclick = async () => {
   hitSource = await session.requestHitTestSource({ space: viewer });
   touchSource = session.requestHitTestSourceForTransientInput ? await hitTestSource(session, { profile: 'generic-touchscreen' }) : null;
   session.addEventListener('select', onSelect);
+  session.addEventListener('selectstart', () => { if (mode === 'group') lasso = []; });
+  session.addEventListener('selectend', () => { lasso = null; drawLasso(); });
   session.addEventListener('end', () => {
     // the next session has a new world origin: positions only survive through the saved reference frame
     hitSource = null; touchSource = null; touchHits.clear(); undoStack.length = 0; anchor = null; anchorPending = false; anchorOffset = null; rootPose = null; refs = null; xrSession = null; occlusionOn = false; occ.uOn.value = 0;
@@ -1060,6 +1100,11 @@ renderer.setAnimationLoop((t, frame) => {
       reticle.matrix.copy(show).multiply(tmp.makeScale(s, s, s));
     }
     preview(show && root.worldToLocal(new THREE.Vector3().setFromMatrixPosition(show)));
+    // lasso follows the finger (or the reticle on phones without touch hit-test), one point every 5 mm
+    if (lasso && show && rootPose) {
+      const q = root.worldToLocal(new THREE.Vector3().setFromMatrixPosition(show)), last = lasso.at(-1);
+      if (!last || Math.hypot(q.x - last.x, q.z - last.z) > 0.005) lasso.push({ x: q.x, y: q.y, z: q.z }), drawLasso();
+    }
     updateDepth(frame, ref);
   }
   animate();
