@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import {
   INCH, BASES_MM, RULES, edgeDist, incoherent, engaged, inRange, chargeReach, newScale, toIn, rectFromTaps,
   inArea, inPoly, modelCover, unitCover, control, toFrame, fromFrame, d6,
-  hidden, canSee, halfStrength, leadershipPass, endPhaseOwner, PHASES,
+  hidden, canSee, halfStrength, leadershipPass, endPhaseOwner, PHASES, elevIn, moveDist, plunging,
 } from './rules.js';
 import { parseArmyList, linesFromItems, fxKind, has } from './armylist.js';
 
@@ -146,6 +146,9 @@ const wMax = (m) => profOf(m)?.w ?? m.u.w;
 const armed = (m) => !profOf(m) || profOf(m).weapons.includes(weaponOf(m.u).name);
 const shooters = (u) => u.models.filter(armed);
 const loneOp = (u) => has(u.abilities, 'Lone Operative');
+const kw = (u, k) => !!u?.keywords?.includes(k);
+const groundY = () => refs?.A.y ?? 0; // the table: root origin is the first tap on it
+const moved = (u, a, b) => moveDist(a, b, kw(u, 'FLY'));
 // next profile still short of its count, else the last one (extra troopers)
 function autoProfile(u) {
   if (!u.profiles?.length) return undefined;
@@ -321,7 +324,8 @@ function refresh() {
       m.halo.visible = enemy && (sel.roll?.kind === 'charge' ? chargeReach(sel.models, m, sel.roll.n) : canTarget(sel, m, hid));
       // remaining wounds above damaged multi-wound models; Damaged x: -1 to hit at x wounds or fewer
       const dmgd = u.damaged && m.wounds <= u.damaged;
-      const key = m.wounds < wMax(m) || dmgd ? `${m.wounds}/${wMax(m)} PV${dmgd ? ' -1 CT' : ''}` : '';
+      const up = elevIn(m, groundY()), upTxt = up >= 1 ? ` ↑${up.toFixed(1)}"` : '';
+      const key = (m.wounds < wMax(m) || dmgd ? `${m.wounds}/${wMax(m)} PV${dmgd ? ' -1 CT' : ''}` : '') + upTxt;
       if (key !== m.tagKey) {
         if (m.tag) removeObj(m.tag);
         m.tag = key ? label(key, new THREE.Vector3(0, 0.03, 0), '#ff9500') : null;
@@ -473,7 +477,9 @@ function snapshot() {
   // rounded to 0.1 mm so the same table gives the same JSON on both phones (no float-noise echoes)
   const f = (p) => {
     const { u, v } = toFrame(p, refs.A, refs.B);
-    return { u: Math.round(u * 1e4) / 1e4, v: Math.round(v * 1e4) / 1e4 };
+    const q = { u: Math.round(u * 1e4) / 1e4, v: Math.round(v * 1e4) / 1e4 };
+    if (p.y != null && Math.abs(p.y - refs.A.y) > 0.002) q.h = Math.round((p.y - refs.A.y) * 1e4) / 1e4; // height above the table
+    return q;
   };
   return {
     d: Math.hypot(refs.B.x - refs.A.x, refs.B.z - refs.A.z),
@@ -502,7 +508,7 @@ function clearAll(keepView = false) {
 }
 function restore(s, keepView = false) {
   clearAll(keepView);
-  const g = (q) => ({ ...fromFrame(q, refs.A, refs.B), y: refs.A.y });
+  const g = (q) => ({ ...fromFrame(q, refs.A, refs.B), y: refs.A.y + (q.h ?? 0) });
   ({ turn = 1, phase = 0, started = false } = s);
   for (const su of s.units) {
     const { models, ...props } = su;
@@ -522,10 +528,12 @@ function autosave() {
   sendTimer = setTimeout(() => {
     if (!refs) return;
     // only real game changes are sent: a selection change must not overwrite the other player's newer state
-    const json = JSON.stringify(snapshot());
-    if (json === lastSync) return;
-    lastSync = json;
-    fetch(`/state?room=${encodeURIComponent(room)}`, { method: 'POST', body: `{"from":${JSON.stringify(clientId)},"state":${json}}` })
+    // army lists travel with the game: each phone ends up with both players' lists (newest import wins per side)
+    const json = JSON.stringify(snapshot()), key = json + JSON.stringify(armiesAt);
+    if (key === lastSync) return;
+    lastSync = key;
+    const lists = Object.fromEntries(Object.keys(armiesAt).map((side) => [side, { at: armiesAt[side], units: armies[side] }]));
+    fetch(`/state?room=${encodeURIComponent(room)}`, { method: 'POST', body: `{"from":${JSON.stringify(clientId)},"state":${json},"armies":${JSON.stringify(lists)}}` })
       .then((r) => r.ok || status(`Synchro : envoi refusé (${r.status})`))
       .catch(() => status('Synchro : envoi impossible'));
   }, 150);
@@ -538,7 +546,7 @@ function applyRemote(s) {
   try {
     restore(s, true);
     undoStack.length = 0; // undoing now would overwrite the other player's change
-    lastSync = JSON.stringify(snapshot());
+    lastSync = JSON.stringify(snapshot()) + JSON.stringify(armiesAt);
     if (units[selIdx]) selectUnit(units[selIdx]);
     pending = pend ? units[pend[0]]?.models[pend[1]] ?? null : keep;
   } catch (err) {
@@ -553,6 +561,7 @@ if (room) {
     let msg;
     try { msg = JSON.parse(e.data); } catch { return; }
     if (msg.from === clientId || !Array.isArray(msg.state?.units)) return;
+    mergeArmies(msg.armies);
     if (!refs) return (remoteState = msg.state), status('Synchro : partie reçue, pose les Repères pour l\'afficher');
     applyRemote(msg.state);
   };
@@ -609,10 +618,10 @@ const handlers = {
   measure(p) {
     const pt = target(p);
     if (!pending) return disposeTree(notes), dot(pt), (pending = pt), status('Mesure : touche le 2e point');
-    const d = edgeDist(pending, pt);
+    const d = edgeDist(pending, pt), dy = Math.abs((pt.y ?? 0) - (pending.y ?? 0));
     line(pending, pt, WHITE, fmt(d));
     pending = null;
-    status(`Distance socle à socle : ${fmt(d)}`);
+    status(`Distance socle à socle : ${fmt(d)}${toIn(dy) >= 0.5 ? ` – écart vertical ${fmt(dy)}${toIn(dy) > RULES.vertical ? ' (> 5" : hors engagement/cohésion)' : ''}` : ''}`);
   },
   move(p) {
     if (!pending) {
@@ -625,13 +634,14 @@ const handlers = {
     const m = pending, max = allowedMove(m.u);
     pending = null;
     disposeTree(notes);
-    const d = Math.hypot(p.x - m.x, p.z - m.z), over = toIn(d) > max + 1e-6;
+    const d = moved(m.u, m, p), over = toIn(d) > max + 1e-6, climb = Math.abs(p.y - m.y);
     line({ ...m, r: 0 }, { ...p, r: 0 }, over ? RED : GREEN, fmt(d));
     Object.assign(m, { x: p.x, y: p.y, z: p.z });
     m.mesh.position.set(p.x, p.y + 0.001, p.z);
     refresh();
     const eng = engaged(m, enemiesOf(m.u.side)) && m.u.roll?.kind !== 'charge' ? ` – engagée (moins de ${RULES.engagement}")` : '';
-    status((over ? `TROP LOIN : ${fmt(d)} > ${max}"` : `Déplacé de ${fmt(d)}`) + eng);
+    const v = toIn(climb) >= 0.5 ? (kw(m.u, 'FLY') ? ` (vol : ${fmt(climb)} vertical ignoré)` : ` (dont ${fmt(climb)} vertical)`) : '';
+    status((over ? `TROP LOIN : ${fmt(d)} > ${max}"` : `Déplacé de ${fmt(d)}`) + v + eng);
   },
   shoot(p) {
     if (!pending) {
@@ -658,6 +668,8 @@ const handlers = {
     }
     const extra = [
       cover && ' – unité à couvert : CT -1',
+      plunging(a, b.u ? b.u.models : [b], groundY(), { towering: kw(a.u, 'TOWERING'), aircraft: kw(a.u, 'AIRCRAFT') || kw(b.u, 'AIRCRAFT') })
+        && ' – tir plongeant : CT +1',
       indirect && !canSee(a, b, terrains) && ' – tir indirect sans visibilité : -1 touche, cible à couvert',
       has(wp.abilities, 'TORRENT') && ' – Torrent : touche auto',
       has(wp.abilities, 'RAPID FIRE') && toIn(d) <= rangeOf(a.u) / 2 + 1e-6 && ` – Tir rapide : +${wp.abilities.find((x) => /^RAPID FIRE/i.test(x)).split(' ').pop()} A`,
@@ -810,7 +822,7 @@ function preview(p) {
   if (p && pending?.x !== undefined) {
     if (mode === 'measure') { a = pending; b = target(p); d = edgeDist(a, b); }
     else if (mode === 'move' && pending.u) {
-      a = { ...pending, r: 0 }; b = { ...p, r: 0 }; d = Math.hypot(p.x - a.x, p.z - a.z);
+      a = { ...pending, r: 0 }; b = { ...p, r: 0 }; d = moved(pending.u, a, b);
       color = toIn(d) > allowedMove(pending.u) + 1e-6 ? RED : GREEN;
     } else if (mode === 'shoot' && pending.u) {
       a = pending; b = target(p); d = edgeDist(a, b);
@@ -906,6 +918,22 @@ if (store.get('folded')) $('fold').click();
 // One imported list per side (localStorage). Picking a list entry links the selected unit to it (if not linked yet,
 // so models already placed keep their place) or creates a new linked unit; its profile and weapons are copied.
 const armies = JSON.parse(store.get('armies') || '{}');
+const armiesAt = JSON.parse(store.get('armiesAt') || '{}'); // side -> import time, to keep the newest list per side
+function mergeArmies(remote) {
+  if (!remote || typeof remote !== 'object') return;
+  let got = 0;
+  for (const side of ['1', '2']) {
+    const r = remote[side];
+    if (!Array.isArray(r?.units) || !(Number(r.at) > (armiesAt[side] ?? 0))) continue;
+    armies[side] = r.units;
+    armiesAt[side] = Number(r.at);
+    got++;
+  }
+  if (!got) return;
+  store.set('armies', JSON.stringify(armies));
+  store.set('armiesAt', JSON.stringify(armiesAt));
+  renderList();
+}
 const PDFJS = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/';
 async function pdfText(file) {
   const pdfjs = await import(PDFJS + 'pdf.min.mjs');
@@ -977,7 +1005,10 @@ $('armyImport').onclick = async () => {
     const list = parseArmyList(text);
     if (!list.length) return status('Aucune unité reconnue (format attendu : export BattleBase, "NOM 150 PTS" puis les profils)');
     armies[$('side').value] = list;
+    armiesAt[$('side').value] = Date.now();
     store.set('armies', JSON.stringify(armies));
+    store.set('armiesAt', JSON.stringify(armiesAt));
+    autosave(); // shared with the other phone (with the next game change if the table is still empty)
     renderList();
     status(`Liste J${$('side').value} importée : ${list.length} unités. Choisis-les dans le menu à côté de l'arme.`);
   } catch (err) {

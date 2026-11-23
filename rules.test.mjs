@@ -4,6 +4,7 @@ import {
   INCH, edgeDist, incoherent, engaged, inRange, chargeReach, newScale, toIn, rectFromTaps, segHit, inPoly, inArea,
   lineOfSight, modelCover, unitCover, control, toFrame, fromFrame, d6,
 } from './rules.js';
+import { vOk, elevIn, moveDist, plunging, inObjRange } from './rules.js';
 
 const r = 0.016; // 32mm base
 const gap = (inches) => inches * INCH + 2 * r; // centre distance giving an edge gap of `inches`
@@ -143,5 +144,24 @@ assert.equal(d6(() => 0), 1);
 assert.equal(d6(() => 0.9999), 6);
 const k = newScale(0.15, 1, 6);
 assert.ok(close(0.15 / k, 6 * INCH));
+
+// ---------- heights ----------
+const H = (x, yIn, z = 0) => ({ x, z, r, y: yIn * INCH });
+assert.ok(engaged(H(0, 0), [H(gap(1), 4.9)]), 'engaged: 1" apart, 4.9" above');
+assert.ok(!engaged(H(0, 0), [H(gap(1), 5.5)]), 'not engaged: 5.5" above (03.04)');
+assert.ok(engaged(M(0), [M(gap(1))]), 'no heights: 2D as before');
+assert.deepEqual(incoherent([H(0, 0), H(gap(1), 6)]).length, 2, 'coherency needs 5" vertically (03.03)');
+assert.ok(vOk(M(0), H(0, 9)), 'unknown height counts as level');
+assert.ok(close(elevIn(H(0, 3), 0), 3));
+assert.ok(close(moveDist(H(0, 0), H(4 * INCH, 3)), 7 * INCH), 'climb 3" + 4" across = 7"');
+assert.ok(close(moveDist(H(0, 0), H(4 * INCH, 3), true), 4 * INCH), 'FLY ignores vertical (21.03)');
+assert.ok(plunging(H(0, 3), [H(0.3, 0)]), 'on 3" terrain vs ground level: +1 BS');
+assert.ok(!plunging(H(0, 3), [H(0.3, 3)]), 'target not on ground level');
+assert.ok(!plunging(H(0, 1), [H(0.3, 0)]), 'attacker too low');
+assert.ok(!plunging(H(0, 4), [H(0.3, 0)], 0, { aircraft: true }), 'AIRCRAFT: never (23.03)');
+assert.ok(plunging(H(0, 0), [H(gap(10), 0)], 0, { towering: true }), 'TOWERING within 12"');
+assert.ok(!plunging(H(0, 0), [H(gap(13), 0)], 0, { towering: true }));
+const mk = { x: 0, z: 0, r: 0.02, y: 0 };
+assert.ok(inObjRange(H(gap(2), 4), mk) && !inObjRange(H(gap(2), 6), mk), 'objective: 5" vertically (14.01.01)');
 
 console.log('rules ok');

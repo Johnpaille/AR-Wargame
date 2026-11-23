@@ -52,21 +52,25 @@ Recommended order: **Calibrer**, **Repères**, then place terrain, objectives an
 
 | Rule | Value |
 |---|---|
-| Coherency (03.03) | within 2" of one other model, and within 9" of every other model |
-| Engagement range (03.04) | 2" |
+| Coherency (03.03) | within 2" horizontally and 5" vertically of one other model, and within 9" / 5" of every other model |
+| Engagement range (03.04) | 2" horizontally, 5" vertically |
 | Advance (09.06) | M + D6 |
 | Charge (11.04) | 2D6, targets within 12", must end engaged |
 | Obscuring (13.10) | light/dense areas block sight lines, except areas either model is within |
 | Benefit of cover (13.08) | every target model (INFANTRY/BEASTS/SWARM) within a terrain area, or not fully visible behind terrain: BS -1 |
 | Hidden (13.09) | INFANTRY/BEASTS/SWARM within a light/dense area, no ranged attack this turn or last: only visible within 15" |
 | Gone to ground (13.11.01) | hidden and partly behind dense terrain: detection 12" |
-| Objective marker (14.01.01) | 40mm, 3" range; terrain objective: within the area |
+| Objective marker (14.01.01) | 40mm, 3" horizontally and 5" vertically; terrain objective: within the area |
 | Level of control (14.02) | sum of OC in range at each phase end, highest wins, tie = nobody |
 | Secured (14.03) | kept until the opponent's level is greater at a phase end |
 | Battle-shock (01.07, 08.03) | 2D6 ≥ Ld; tested if shocked or at/below half-strength; OC '-' |
+| Moving (13.06, 21.03) | straight line + vertical distance climbed or dropped; FLY ignores the vertical part |
+| Plunging Fire (22.05, 23.03) | attacker on terrain 3"+ high (base measured 2.5"+ above the table), target unit with a model on ground level (< 1"): BS +1; TOWERING: target within 12"; never AIRCRAFT |
 | Half-strength (01.02.01) | models ≤ half the starting strength; single-model unit: wounds ≤ half W |
 
-Simplifications: everything is 2D (heights and the 5" vertical limits ignored); sight lines are sampled between 5 points per base; a terrain footprint stands in for its walls, so Solid (13.11, closed gaps under 3") is treated like Obscuring; a shot made in Tirer mode counts as the unit's ranged attack for Hidden; charge reach ignores pathing; which rules secure an objective is up to the players.
+Heights: each model's height above the table is the AR hit height where it was placed or moved (e.g. on a ruin floor), saved relative to the first Repère. Models raised by 1" or more show "↑x\"" ; Mesurer shows the vertical gap. Visibility stays 2D on purpose: in 11th edition Obscuring areas block sight lines whatever their height (there is no seeing over low terrain).
+
+Simplifications: sight lines are sampled between 5 points per base; a terrain footprint stands in for its walls, so Solid (13.11, closed gaps under 3") is treated like Obscuring; a shot made in Tirer mode counts as the unit's ranged attack for Hidden; charge reach ignores pathing; which rules secure an objective is up to the players.
 
 ## Two phones (shared game)
 
@@ -74,6 +78,7 @@ Open the page with the same room on both phones, e.g. `http://<PC>:8000/?room=pa
 
 - Each player sets the **Repères** on the same 2 physical points: positions are exchanged in that table frame, so each phone sees the other's moves in the right place.
 - Only real game changes are sent (not selections); if both players edit at the same instant, the last one wins.
+- Army lists are shared too: each phone gets both lists (the newest import wins per side). A list imported before anything is on the table goes out with the next change.
 - The second phone also needs a secure origin for WebXR: either a second USB cable + `adb reverse`, or on that phone `chrome://flags/#unsafely-treat-insecure-origin-as-secure` with `http://<PC IP>:8000`.
 - The relay has no authentication: use it on a home network only. `serve.js` never serves dot-folders (`.git`, `.claude`).
 

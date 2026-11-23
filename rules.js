@@ -1,6 +1,7 @@
 // Pure game-rule maths, Warhammer 40,000 11th edition core rules.
-// All positions/radii in real metres on the table plane (x, z). Models: { x, z, r }.
-// shortcut: everything is 2D (horizontal); the 5" vertical limits and model/terrain heights are ignored.
+// All positions/radii in real metres. Models: { x, z, r, y? }; y = height of the base measured by AR (table = groundY).
+// Ranges are horizontal; the vertical limits (5") apply only when both models have a y.
+// shortcut: no model heights (a sight line runs base to base) and no Solid gaps: Obscuring areas block sight at any height.
 export const INCH = 0.0254;
 export const BASES_MM = [25, 28.5, 32, 40, 50, 60, 90];
 export const RULES = {
@@ -12,6 +13,10 @@ export const RULES = {
   objectiveMm: 40,  // objective marker diameter
   detection: 15,    // 13.09 hidden models: detection range
   goneToGround: 3,  // 13.11.01 detection range reduction
+  vertical: 5,      // 03.03 / 03.04 / 14.01.01: "... horizontally and 5" vertically"
+  plunging: 3,      // 22.05 attacker on a terrain section 3" or more in height
+  towering: 12,     // 22.05 TOWERING attacker: target within 12"
+  ground: 1,        // shortcut: "ground level" = base less than 1" above the table (AR height noise ~0.4")
 };
 export const PHASES = ['Commandement', 'Mouvement', 'Tir', 'Charge', 'Combat'];
 
@@ -24,16 +29,36 @@ export function edgeDist(a, b) {
   return Math.max(0, Math.hypot(a.x - b.x, a.z - b.z) - a.r - b.r);
 }
 
-// Models breaking coherency (03.03).
+// Vertical gap within 5" (unknown heights count as level).
+export const vOk = (a, b) => a.y == null || b.y == null || within(Math.abs(a.y - b.y), RULES.vertical);
+const near = (a, b, inches) => within(edgeDist(a, b), inches) && vOk(a, b);
+// Height of a model's base above the table, in inches.
+export const elevIn = (m, groundY = 0) => toIn((m.y ?? groundY) - groundY);
+
+// Models breaking coherency (03.03): within 2" (and 5" vertically) of one model, within 9" (and 5" vertically) of all.
 export function incoherent(models) {
   if (models.length < 2) return [];
   return models.filter((m) => {
     const others = models.filter((o) => o !== m);
-    return !others.some((o) => within(edgeDist(m, o), RULES.coherency)) || others.some((o) => !within(edgeDist(m, o), RULES.coherencyMax));
+    return !others.some((o) => near(m, o, RULES.coherency)) || others.some((o) => !near(m, o, RULES.coherencyMax));
   });
 }
 
-export const engaged = (m, enemies) => enemies.some((e) => within(edgeDist(m, e), RULES.engagement));
+// 03.04: engagement range is 2" horizontally and 5" vertically.
+export const engaged = (m, enemies) => enemies.some((e) => near(m, e, RULES.engagement));
+
+// Distance moved (13.06): straight line horizontally, plus the vertical distance climbed or dropped.
+// 21.03: FLY ignores vertical distance.
+export const moveDist = (from, to, fly = false) =>
+  Math.hypot(to.x - from.x, to.z - from.z) + (fly || from.y == null || to.y == null ? 0 : Math.abs(to.y - from.y));
+
+// 22.05 Plunging Fire: +1 BS against a unit with models on ground level, if the attacker stands on terrain 3"+ high
+// (or is TOWERING and the target is within 12"). 23.03: never for AIRCRAFT.
+// shortcut: "on terrain 3"+ high" = base measured 2.5"+ above the table (AR noise), not the feature's own height.
+export function plunging(a, targets, groundY = 0, { towering = false, aircraft = false } = {}) {
+  if (aircraft || !targets.some((t) => elevIn(t, groundY) < RULES.ground)) return false;
+  return elevIn(a, groundY) >= RULES.plunging - 0.5 || (towering && targets.some((t) => within(edgeDist(a, t), RULES.towering)));
+}
 
 // ---------- terrain areas ----------
 // Terrain: { poly: [{x,z}x4], type: 'dense' | 'light' | 'exposed' }.
@@ -130,7 +155,8 @@ export const chargeReach = (chargers, target, roll) =>
 
 // ---------- objectives (14) ----------
 // obj: { x, z, r } marker or { poly } terrain objective. sides: [{ side, oc, models }].
-export const inObjRange = (m, obj) => (obj.poly ? inArea(m, obj.poly) : within(edgeDist(m, obj), RULES.objective));
+// 14.01.01: within 3" horizontally and 5" vertically of a marker.
+export const inObjRange = (m, obj) => (obj.poly ? inArea(m, obj.poly) : near(m, obj, RULES.objective));
 // Level of control (14.02). Battle-shocked units have OC '-' (01.07).
 export function control(obj, units) {
   const lvl = { 1: 0, 2: 0 };
